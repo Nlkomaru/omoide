@@ -20,7 +20,7 @@ export function createApiApp(options?: { customDb?: AppDatabase }) {
 
   // Better Auth endpoints (/api/auth/*)
   app.on(["GET", "POST"], "/auth/*", async (c) => {
-    const auth = createAuth(c.env);
+    const auth = createAuth(c.env, c.req.raw);
     return auth.handler(c.req.raw);
   });
 

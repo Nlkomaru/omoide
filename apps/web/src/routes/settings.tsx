@@ -73,6 +73,32 @@ function SettingsPage() {
     setTimeout(() => setCopied(false), 2000);
   }
 
+  async function handleGitHubSignIn() {
+    const res = await fetch("/api/auth/sign-in/social", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        provider: "github",
+        callbackURL: `${window.location.origin}/settings`,
+      }),
+    });
+    if (res.ok) {
+      const data = (await res.json()) as { url?: string };
+      if (data.url) {
+        window.location.href = data.url;
+      }
+    }
+  }
+
+  async function handleSignOut() {
+    await fetch("/api/auth/sign-out", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    await loadMe();
+  }
+
   return (
     <main className="mx-auto max-w-4xl px-4 py-8 sm:px-8 md:py-12 space-y-8">
       <header className="space-y-2 border-b border-[#E4E4E7] pb-6">
@@ -91,11 +117,31 @@ function SettingsPage() {
       </header>
 
       {/* Current User Card */}
-      {me && (
-        <section className="rounded-xl border border-[#E4E4E7] bg-[#FAFAFA] p-5 space-y-2">
+      <section className="rounded-xl border border-[#E4E4E7] bg-[#FAFAFA] p-5 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="text-xs font-semibold uppercase tracking-wider text-[#71717A]">
             Active Owner Session
           </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void handleGitHubSignIn()}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-[#18181B] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#3F3F46]"
+            >
+              Sign in with GitHub
+            </button>
+            {me?.actor.authMethod === "session" && (
+              <button
+                type="button"
+                onClick={() => void handleSignOut()}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-[#E4E4E7] bg-white px-3 py-1.5 text-xs font-medium text-[#3F3F46] hover:bg-[#FAFAFA]"
+              >
+                Sign out
+              </button>
+            )}
+          </div>
+        </div>
+        {me ? (
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 font-mono-spec text-xs">
             <div className="rounded-md border border-[#E4E4E7] bg-white p-3">
               <div className="text-[10px] text-[#71717A]">User ID</div>
@@ -112,8 +158,13 @@ function SettingsPage() {
               <div className="mt-0.5 font-medium text-[#18181B]">{me.actor.authMethod}</div>
             </div>
           </div>
-        </section>
-      )}
+        ) : (
+          <div className="rounded-md border border-[#E4E4E7] bg-white p-3 text-xs text-[#71717A]">
+            Not signed in yet. Click <strong>Sign in with GitHub</strong> to authenticate on this
+            origin (works on both production and preview URLs).
+          </div>
+        )}
+      </section>
 
       {/* Create New CLI Key */}
       <section className="rounded-xl border border-[#E4E4E7] bg-white p-5 space-y-4">

@@ -2,14 +2,33 @@ import { apiKey } from "@better-auth/api-key";
 import { uuidv7 } from "@omoide/core";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { oAuthProxy } from "better-auth/plugins";
 import { tanstackStartCookies } from "better-auth/tanstack-start";
 import { and, desc, eq } from "drizzle-orm";
 import { type AppDatabase, createDb } from "~/db/client";
 import * as schema from "~/db/schema";
 
 const DEFAULT_SECRET = "omoide-dev-secret-change-in-production-32-chars";
+const DEFAULT_PRODUCTION_URL = "https://omoide.nikomaru.dev";
 
-export function createAuth(env: Env) {
+export function resolveRequestOrigin(request?: Request): string | undefined {
+  if (!request) return undefined;
+  const headers = request.headers;
+  const host = headers.get("x-forwarded-host") ?? headers.get("host");
+  if (host) {
+    const proto =
+      headers.get("x-forwarded-proto") ??
+      (host.startsWith("localhost") || host.startsWith("127.0.0.1") ? "http" : "https");
+    return `${proto}://${host}`;
+  }
+  try {
+    return new URL(request.url).origin;
+  } catch {
+    return undefined;
+  }
+}
+
+export function createAuth(env: Env, request?: Request) {
   const db = createDb(env.DB);
   const allowedUsers = (env.ALLOWED_USERS ?? "")
     .split(",")
@@ -18,10 +37,20 @@ export function createAuth(env: Env) {
 
   const ghClientId = env.GH_CLIENT_ID || env.GITHUB_CLIENT_ID;
   const ghClientSecret = env.GH_CLIENT_SECRET || env.GITHUB_CLIENT_SECRET;
+  const productionURL = env.BETTER_AUTH_URL || DEFAULT_PRODUCTION_URL;
+  const baseURL = resolveRequestOrigin(request) || productionURL || "http://localhost:3000";
 
   return betterAuth({
     secret: env.BETTER_AUTH_SECRET || DEFAULT_SECRET,
-    baseURL: env.BETTER_AUTH_URL || "http://localhost:3000",
+    baseURL,
+    trustedOrigins: [
+      productionURL,
+      "https://omoide.nikomaru.dev",
+      "https://omoide-web.nikomaru.workers.dev",
+      "https://*-omoide-web.nikomaru.workers.dev",
+      "http://localhost:3000",
+      "http://localhost:5173",
+    ],
     database: drizzleAdapter(db, {
       provider: "sqlite",
       schema: {
@@ -55,7 +84,9 @@ export function createAuth(env: Env) {
           }
         : {},
     plugins: [
-      tanstackStartCookies(),
+      oAuthProxy({
+        productionURL,
+      }),
       apiKey({
         defaultPrefix: "omod_",
         enableSessionForAPIKeys: true,
@@ -63,6 +94,7 @@ export function createAuth(env: Env) {
           enabled: false,
         },
       }),
+      tanstackStartCookies(),
     ],
   });
 }
@@ -146,7 +178,7 @@ export async function resolveAuthenticatedActor(
   }
 
   try {
-    const auth = createAuth(env);
+    const auth = createAuth(env, request);
     const sessionData = await auth.api.getSession({ headers });
     if (sessionData?.user) {
       return {

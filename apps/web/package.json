@@ -5,17 +5,16 @@
   "type": "module",
   "scripts": {
     "dev": "vite dev --port 3000 --host",
-    "build": "vite build",
+    "build": "cf build",
     "preview": "vite preview",
-    "deploy": "pnpm run build && wrangler deploy",
+    "deploy": "cf build && cf deploy --prebuilt --mode production",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "wrangler d1 migrations apply omoide --local"
+    "db:migrate": "cf d1 migrations apply \"$CLOUDFLARE_DATABASE_ID\" --dir migrations"
   },
   "dependencies": {
     "@better-auth/api-key": "^1.6.25",
-    "@cloudflare/vite-plugin": "1.31.0",
     "@fontsource/jetbrains-mono": "^5.2.8",
     "@fontsource/noto-sans-jp": "^5.2.9",
     "@fontsource/poppins": "^5.2.7",
@@ -42,11 +41,13 @@
     "zod": "^4.0.0"
   },
   "devDependencies": {
+    "@cloudflare/vite-plugin": "2.0.0-beta.v.2",
     "@cloudflare/workers-types": "^4.20250327.0",
     "@types/node": "^22.13.14",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^5.0.4",
+    "cf": "1.0.0-beta.20",
     "drizzle-kit": "^0.31.0",
     "typescript": "^5.8.2",
     "vite": "^7.1.7",

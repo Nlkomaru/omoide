@@ -4,6 +4,7 @@ import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { AppDatabase } from "~/db/client";
 import * as schema from "~/db/schema";
+import { resolveRequestOrigin } from "~/server/auth";
 import { createApiApp } from "./handler";
 
 function createTestDatabase(): AppDatabase {
@@ -435,5 +436,32 @@ describe("Omoide REST API (@omoide/web)", () => {
     expect(listBody.facets.favoriteCount).toBe(1);
     expect(listBody.facets.rawCount).toBe(1);
     expect(listBody.facets.developedCount).toBe(1);
+  });
+
+  it("resolves request origin for custom domain, branch preview, and commit preview URLs", () => {
+    const prodReq = new Request("https://omoide.nikomaru.dev/api/auth/session", {
+      headers: { host: "omoide.nikomaru.dev", "x-forwarded-proto": "https" },
+    });
+    expect(resolveRequestOrigin(prodReq)).toBe("https://omoide.nikomaru.dev");
+
+    const branchPreviewReq = new Request(
+      "https://main-omoide-web.nikomaru.workers.dev/api/auth/session",
+      {
+        headers: {
+          host: "main-omoide-web.nikomaru.workers.dev",
+          "x-forwarded-proto": "https",
+        },
+      },
+    );
+    expect(resolveRequestOrigin(branchPreviewReq)).toBe(
+      "https://main-omoide-web.nikomaru.workers.dev",
+    );
+
+    const commitPreviewReq = new Request(
+      "https://ea62a3d3-omoide-web.nikomaru.workers.dev/api/auth/session",
+    );
+    expect(resolveRequestOrigin(commitPreviewReq)).toBe(
+      "https://ea62a3d3-omoide-web.nikomaru.workers.dev",
+    );
   });
 });
