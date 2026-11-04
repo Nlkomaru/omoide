@@ -18,6 +18,7 @@ import {
   scanDevelopedSessionDirectory,
   scanPhotoDirectories,
 } from "./scanner";
+import { executePhotoRename, scanDirectoriesForRename } from "./renamer";
 
 async function main() {
   const args = process.argv.slice(2);
@@ -37,6 +38,9 @@ async function main() {
     case "sync-favorites":
       await runSyncFavoritesCommand(restArgs);
       break;
+    case "rename":
+      await runRenameCommand(restArgs);
+      break;
     case "post":
       await runPostCommand(restArgs);
       break;
@@ -55,6 +59,7 @@ Usage:
   omoide sync [paths...] [--with-raw] [--quality <1-100>] [--max-bytes <bytes>] [--concurrency <4>] [--dry-run]
   omoide sync-developed <session-dir> [--photo-dirs <dir1,dir2>] [--quality <1-100>] [--max-bytes <bytes>] [--concurrency <4>] [--dry-run]
   omoide sync-favorites [paths...] [--concurrency <4>] [--dry-run]
+  omoide rename [paths...] [--dest <dir>] [--copy] [--dry-run]
   omoide post add --photo <uuidv7> --platform <instagram|twitter|blog|portfolio> --url <post-url> [--caption <text>]
 
 Default Windows Sync Directories (overridable in config or --dirs):
@@ -486,6 +491,95 @@ async function runPostCommand(argv: string[]) {
   console.log(
     `Registered ${post.platform} post (${post.id}) for photo ${post.photoId}: ${post.postUrl}`,
   );
+}
+
+/**
+ * `omoide rename [paths...] [--dest <dir>] [--copy] [--dry-run]`
+ *
+ * Scans photo directories and reorganizes RAW/JPEG photos into `YYYY-MM-DD/<uuidv7>.<ext>`.
+ * Files sharing the same stem (e.g. DSC02897.ARW and DSC02897.JPG) receive identical UUIDv7s.
+ */
+async function runRenameCommand(argv: string[]) {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    options: {
+      dest: { type: "string" },
+      copy: { type: "boolean", default: false },
+      "dry-run": { type: "boolean", default: false },
+    },
+    allowPositionals: true,
+  });
+
+  const config = await loadCliConfig();
+  const targetDirs =
+    positionals.length > 0
+      ? positionals
+      : getDefaultSyncDirectories(config.photoDirs);
+
+  if (targetDirs.length === 0) {
+    console.error("Error: No photo directories found to scan for rename.");
+    console.error("Specify directories directly (e.g. `omoide rename F:\\DCIM`) or configure photoDirs.");
+    process.exit(1);
+  }
+
+  const isDryRun = Boolean(values["dry-run"]);
+  const isCopy = Boolean(values.copy);
+  const destDir = values.dest;
+
+  console.log(`Scanning directories for photos to ${isCopy ? "copy" : "rename"}:`);
+  for (const dir of targetDirs) {
+    console.log(`  - ${dir}`);
+  }
+  if (destDir) {
+    console.log(`Target destination: ${destDir}`);
+  }
+  if (isDryRun) {
+    console.log("[DRY-RUN] Simulating rename operations without modifying files.\n");
+  } else {
+    console.log("");
+  }
+
+  const { groups, skippedAlreadyRenamed } = await scanDirectoriesForRename(targetDirs);
+
+  if (skippedAlreadyRenamed > 0) {
+    console.log(`Skipped ${skippedAlreadyRenamed} files already formatted as YYYY-MM-DD/<uuidv7>.<ext>.`);
+  }
+
+  if (groups.length === 0) {
+    console.log("No photos found that require renaming.");
+    return;
+  }
+
+  let totalFilesToProcess = 0;
+  for (const g of groups) {
+    totalFilesToProcess += g.files.length;
+  }
+  console.log(`Found ${groups.length} photo groups (${totalFilesToProcess} total files) to process.\n`);
+
+  const summary = await executePhotoRename(groups, {
+    dest: destDir,
+    copy: isCopy,
+    dryRun: isDryRun,
+  });
+
+  console.log(`\n=== Rename Summary ===`);
+  console.log(`Total files scanned:   ${summary.totalScanned}`);
+  console.log(`Total groups:          ${summary.totalGroups}`);
+  console.log(`Successfully handled:  ${summary.processed}`);
+  console.log(`Skipped:               ${summary.skipped}`);
+  console.log(`Errors:                ${summary.errors}`);
+
+  if (isDryRun) {
+    console.log("\n[DRY-RUN] Preview of first 10 operations:");
+    const sample = summary.items.slice(0, 10);
+    for (const item of sample) {
+      console.log(`  ${item.stem} -> ${item.destinationPath}`);
+    }
+    if (summary.items.length > 10) {
+      console.log(`  ... and ${summary.items.length - 10} more files.`);
+    }
+    console.log("\nRe-run without --dry-run to apply these changes.");
+  }
 }
 
 main().catch((err) => {
