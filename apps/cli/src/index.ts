@@ -152,9 +152,16 @@ async function runSyncCommand(argv: string[]) {
     process.exit(1);
   }
 
-  const concurrency = values.concurrency
+  const rawConcurrency = values.concurrency
     ? Number.parseInt(values.concurrency, 10)
     : (config.concurrency ?? 4);
+  // Cap concurrency to 16 to prevent socket connect timeouts on residential upload links
+  const concurrency = Math.min(Math.max(1, rawConcurrency), 16);
+  if (rawConcurrency > 16) {
+    console.log(
+      `ℹ️ Capping concurrency to ${concurrency} (requested: ${rawConcurrency}) to prevent socket exhaustion and timeouts.\n`,
+    );
+  }
   const quality = values.quality ? Number.parseInt(values.quality, 10) : config.jpegQuality;
   const maxBytes = values["max-bytes"]
     ? Number.parseInt(values["max-bytes"], 10)
@@ -189,6 +196,8 @@ async function runSyncCommand(argv: string[]) {
   let uploadedCount = 0;
   let skippedCount = 0;
   let rawUploadedCount = 0;
+  let failedCount = 0;
+  const failedItems: Array<{ stem: string; error: string }> = [];
 
   const syncBar = new CliProgressBar({
     total: pairs.length,
@@ -196,75 +205,92 @@ async function runSyncCommand(argv: string[]) {
   });
 
   await runWithConcurrency(pairs, concurrency, async (pair) => {
-    const sha = hashByPath.get(pair.jpegPath);
-    if (!sha) {
-      syncBar.increment(1, `${pair.stem} (skip)`);
-      return;
-    }
-    const existing = existingByHash.get(sha);
-
-    if (existing) {
-      skippedCount++;
-      // If --with-raw or photo is favorited on server and missing RAW, upload .ARW
-      if (pair.rawPath && !existing.hasRaw && (values["with-raw"] || existing.isFavorite)) {
-        if (values["dry-run"]) {
-          syncBar.logAbove(`[DRY-RUN] Would attach RAW ${pair.rawPath} -> ${existing.photoId}`);
-        } else {
-          syncBar.logAbove(
-            `Uploading 1:1 RAW ${path.basename(pair.rawPath)} -> ${existing.photoId}...`,
-          );
-          const rawMeta = await prepareRawUpload(pair.rawPath);
-          await client.uploadRawFile(existing.photoId, rawMeta, pair.rawPath);
-          rawUploadedCount++;
-        }
+    try {
+      const sha = hashByPath.get(pair.jpegPath);
+      if (!sha) {
+        syncBar.increment(1, `${pair.stem} (skip)`);
+        return;
       }
-      syncBar.increment(1, `${pair.stem} (cached)`);
-      return;
-    }
+      const existing = existingByHash.get(sha);
 
-    const prepared = await prepareBasePhotoUpload(pair.jpegPath, sha, quality, maxBytes);
-    if (values["dry-run"]) {
+      if (existing) {
+        skippedCount++;
+        // If --with-raw or photo is favorited on server and missing RAW, upload .ARW
+        if (pair.rawPath && !existing.hasRaw && (values["with-raw"] || existing.isFavorite)) {
+          if (values["dry-run"]) {
+            syncBar.logAbove(`[DRY-RUN] Would attach RAW ${pair.rawPath} -> ${existing.photoId}`);
+          } else {
+            syncBar.logAbove(
+              `Uploading 1:1 RAW ${path.basename(pair.rawPath)} -> ${existing.photoId}...`,
+            );
+            const rawMeta = await prepareRawUpload(pair.rawPath);
+            await client.uploadRawFile(existing.photoId, rawMeta, pair.rawPath);
+            rawUploadedCount++;
+          }
+        }
+        syncBar.increment(1, `${pair.stem} (cached)`);
+        return;
+      }
+
+      const prepared = await prepareBasePhotoUpload(pair.jpegPath, sha, quality, maxBytes);
+      if (values["dry-run"]) {
+        syncBar.logAbove(
+          `[DRY-RUN] Would upload ${pair.stem} (${prepared.photoId}) — ${prepared.metadata.exif.lensModel ?? "ILCE-7C"}${
+            prepared.compressedJpegBuffer
+              ? ` [compressed ${Math.round(prepared.metadata.jpegByteSize / 1024)}KB]`
+              : ""
+          }`,
+        );
+        syncBar.increment(1, `${pair.stem} (dry-run)`);
+        return;
+      }
+
       syncBar.logAbove(
-        `[DRY-RUN] Would upload ${pair.stem} (${prepared.photoId}) — ${prepared.metadata.exif.lensModel ?? "ILCE-7C"}${
+        `Uploading ${pair.stem} -> UUIDv7 ${prepared.photoId} (${prepared.metadata.exif.focalLengthMm ?? "?"}mm f/${prepared.metadata.exif.fNumber ?? "?"})${
           prepared.compressedJpegBuffer
             ? ` [compressed ${Math.round(prepared.metadata.jpegByteSize / 1024)}KB]`
             : ""
-        }`,
+        }...`,
       );
-      syncBar.increment(1, `${pair.stem} (dry-run)`);
-      return;
+      const { photoId } = await client.uploadBasePhoto(
+        prepared.metadata,
+        pair.jpegPath,
+        prepared.thumbAvifBuffer,
+        prepared.compressedJpegBuffer,
+      );
+      uploadedCount++;
+
+      if (pair.rawPath && values["with-raw"]) {
+        syncBar.logAbove(`  + Attaching 1:1 RAW ${path.basename(pair.rawPath)}...`);
+        const rawMeta = await prepareRawUpload(pair.rawPath);
+        await client.uploadRawFile(photoId, rawMeta, pair.rawPath);
+        rawUploadedCount++;
+      }
+
+      syncBar.increment(1, `${pair.stem} (uploaded)`);
+    } catch (err) {
+      failedCount++;
+      const msg = err instanceof Error ? err.message : String(err);
+      failedItems.push({ stem: pair.stem, error: msg });
+      syncBar.logAbove(`❌ Failed to upload ${pair.stem}: ${msg}`);
+      syncBar.increment(1, `${pair.stem} (failed)`);
     }
-
-    syncBar.logAbove(
-      `Uploading ${pair.stem} -> UUIDv7 ${prepared.photoId} (${prepared.metadata.exif.focalLengthMm ?? "?"}mm f/${prepared.metadata.exif.fNumber ?? "?"})${
-        prepared.compressedJpegBuffer
-          ? ` [compressed ${Math.round(prepared.metadata.jpegByteSize / 1024)}KB]`
-          : ""
-      }...`,
-    );
-    const { photoId } = await client.uploadBasePhoto(
-      prepared.metadata,
-      pair.jpegPath,
-      prepared.thumbAvifBuffer,
-      prepared.compressedJpegBuffer,
-    );
-    uploadedCount++;
-
-    if (pair.rawPath && values["with-raw"]) {
-      syncBar.logAbove(`  + Attaching 1:1 RAW ${path.basename(pair.rawPath)}...`);
-      const rawMeta = await prepareRawUpload(pair.rawPath);
-      await client.uploadRawFile(photoId, rawMeta, pair.rawPath);
-      rawUploadedCount++;
-    }
-
-    syncBar.increment(1, `${pair.stem} (uploaded)`);
   });
 
   syncBar.complete();
 
   console.log(
-    `Sync complete: ${uploadedCount} JPEGs uploaded, ${rawUploadedCount} RAWs attached, ${skippedCount} already up to date.`,
+    `Sync complete: ${uploadedCount} JPEGs uploaded, ${rawUploadedCount} RAWs attached, ${skippedCount} already up to date, ${failedCount} failed.`,
   );
+  if (failedItems.length > 0) {
+    console.log(`\n⚠️  ${failedItems.length} photos failed to sync:`);
+    for (const item of failedItems.slice(0, 10)) {
+      console.log(`  - ${item.stem}: ${item.error}`);
+    }
+    if (failedItems.length > 10) {
+      console.log(`  ... and ${failedItems.length - 10} more. Run sync again to retry.`);
+    }
+  }
 }
 
 /**
@@ -298,9 +324,15 @@ async function runSyncDevelopedCommand(argv: string[]) {
     ? values["photo-dirs"].split(",").map((d) => d.trim())
     : getDefaultSyncDirectories(config.photoDirs);
 
-  const concurrency = values.concurrency
+  const rawConcurrency = values.concurrency
     ? Number.parseInt(values.concurrency, 10)
     : (config.concurrency ?? 4);
+  const concurrency = Math.min(Math.max(1, rawConcurrency), 16);
+  if (rawConcurrency > 16) {
+    console.log(
+      `ℹ️ Capping concurrency to ${concurrency} (requested: ${rawConcurrency}) to prevent socket exhaustion and timeouts.\n`,
+    );
+  }
   const quality = values.quality ? Number.parseInt(values.quality, 10) : config.jpegQuality;
   const maxBytes = values["max-bytes"]
     ? Number.parseInt(values["max-bytes"], 10)
@@ -321,55 +353,68 @@ async function runSyncDevelopedCommand(argv: string[]) {
     title: values["dry-run"] ? "Dry-run dev" : "Syncing dev",
   });
 
+  let failedDevCount = 0;
+
   await runWithConcurrency(entries, concurrency, async (entry) => {
-    const jpegPath = entry.jpegPath ?? jpegByStem.get(entry.stem) ?? null;
-    const rawPath = entry.rawPath ?? rawByStem.get(entry.stem) ?? null;
+    try {
+      const jpegPath = entry.jpegPath ?? jpegByStem.get(entry.stem) ?? null;
+      const rawPath = entry.rawPath ?? rawByStem.get(entry.stem) ?? null;
 
-    if (!jpegPath) {
-      devBar.logAbove(
-        `Warning: Could not find base JPEG for ${entry.stem} in session dir or archive dirs. Skipping.`,
+      if (!jpegPath) {
+        devBar.logAbove(
+          `Warning: Could not find base JPEG for ${entry.stem} in session dir or archive dirs. Skipping.`,
+        );
+        devBar.increment(1, `${entry.stem} (missing base)`);
+        return;
+      }
+
+      const preparedBase = await prepareBasePhotoUpload(jpegPath, undefined, quality, maxBytes);
+      if (values["dry-run"]) {
+        devBar.logAbove(
+          `[DRY-RUN] ${entry.stem} -> UUIDv7 ${preparedBase.photoId} | RAW: ${rawPath ? "yes" : "no"} | Developments: ${entry.developments.map((d) => `${d.format}:${d.label}`).join(", ")}`,
+        );
+        devBar.increment(1, `${entry.stem} (dry-run)`);
+        return;
+      }
+
+      // Ensure base photo exists & mark as favorite since it was selected for development
+      preparedBase.metadata.isFavorite = true;
+      const { photoId } = await client.uploadBasePhoto(
+        preparedBase.metadata,
+        jpegPath,
+        preparedBase.thumbAvifBuffer,
+        preparedBase.compressedJpegBuffer,
       );
-      devBar.increment(1, `${entry.stem} (missing base)`);
-      return;
+      devBar.logAbove(`Synced base photo ${entry.stem} (${photoId})`);
+
+      if (rawPath) {
+        devBar.logAbove(`  + Uploading 1:1 RAW ${path.basename(rawPath)}...`);
+        const rawMeta = await prepareRawUpload(rawPath);
+        await client.uploadRawFile(photoId, rawMeta, rawPath);
+      }
+
+      for (const dev of entry.developments) {
+        devBar.logAbove(
+          `  + Uploading 1:N developed variant [${dev.format.toUpperCase()}] ${dev.label}...`,
+        );
+        const devMeta = await prepareDevelopmentUpload(dev.filePath, dev.format, dev.label);
+        await client.uploadDevelopmentVariant(photoId, devMeta, dev.filePath);
+      }
+
+      devBar.increment(1, `${entry.stem} (done)`);
+    } catch (err) {
+      failedDevCount++;
+      const msg = err instanceof Error ? err.message : String(err);
+      devBar.logAbove(`❌ Failed to sync developed entry ${entry.stem}: ${msg}`);
+      devBar.increment(1, `${entry.stem} (failed)`);
     }
-
-    const preparedBase = await prepareBasePhotoUpload(jpegPath, undefined, quality, maxBytes);
-    if (values["dry-run"]) {
-      devBar.logAbove(
-        `[DRY-RUN] ${entry.stem} -> UUIDv7 ${preparedBase.photoId} | RAW: ${rawPath ? "yes" : "no"} | Developments: ${entry.developments.map((d) => `${d.format}:${d.label}`).join(", ")}`,
-      );
-      devBar.increment(1, `${entry.stem} (dry-run)`);
-      return;
-    }
-
-    // Ensure base photo exists & mark as favorite since it was selected for development
-    preparedBase.metadata.isFavorite = true;
-    const { photoId } = await client.uploadBasePhoto(
-      preparedBase.metadata,
-      jpegPath,
-      preparedBase.thumbAvifBuffer,
-      preparedBase.compressedJpegBuffer,
-    );
-    devBar.logAbove(`Synced base photo ${entry.stem} (${photoId})`);
-
-    if (rawPath) {
-      devBar.logAbove(`  + Uploading 1:1 RAW ${path.basename(rawPath)}...`);
-      const rawMeta = await prepareRawUpload(rawPath);
-      await client.uploadRawFile(photoId, rawMeta, rawPath);
-    }
-
-    for (const dev of entry.developments) {
-      devBar.logAbove(
-        `  + Uploading 1:N developed variant [${dev.format.toUpperCase()}] ${dev.label}...`,
-      );
-      const devMeta = await prepareDevelopmentUpload(dev.filePath, dev.format, dev.label);
-      await client.uploadDevelopmentVariant(photoId, devMeta, dev.filePath);
-    }
-
-    devBar.increment(1, `${entry.stem} (done)`);
   });
 
-  devBar.complete("Developed session sync complete.");
+  devBar.complete(
+    failedDevCount > 0
+      ? `Developed session sync finished with ${failedDevCount} failures.`
+      : "Developed session sync complete.",
+  );
 }
 
 /**
