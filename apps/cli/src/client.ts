@@ -35,6 +35,68 @@ export function getConfigFilePath(): string {
   return path.join(baseDir, "omoide", "config.json");
 }
 
+/**
+ * Resilient fetch wrapper with per-request timeout and exponential backoff retry.
+ * Handles connect timeouts, connection resets, and transient Cloudflare/server 5xx errors.
+ */
+export async function fetchWithRetry(
+  url: string | URL,
+  init?: RequestInit,
+  maxRetries = 3,
+  baseDelayMs = 1000,
+  timeoutMs = 45_000,
+): Promise<Response> {
+  let attempt = 0;
+
+  while (true) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+    // Chain with caller's signal if present
+    const signal = init?.signal ? anySignal([init.signal, controller.signal]) : controller.signal;
+
+    try {
+      const res = await fetch(url, {
+        ...init,
+        signal,
+      });
+
+      if (res.status === 502 || res.status === 503 || res.status === 504) {
+        if (attempt < maxRetries) {
+          attempt++;
+          const delay = baseDelayMs * 2 ** (attempt - 1) + Math.random() * 500;
+          await new Promise((r) => setTimeout(r, delay));
+          continue;
+        }
+      }
+
+      return res;
+    } catch (err: unknown) {
+      if (attempt < maxRetries) {
+        attempt++;
+        const delay = baseDelayMs * 2 ** (attempt - 1) + Math.random() * 500;
+        await new Promise((r) => setTimeout(r, delay));
+        continue;
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+function anySignal(signals: AbortSignal[]): AbortSignal {
+  const controller = new AbortController();
+  for (const s of signals) {
+    if (s.aborted) {
+      controller.abort();
+      return controller.signal;
+    }
+    s.addEventListener("abort", () => controller.abort(), { once: true });
+  }
+  return controller.signal;
+}
+
 export async function loadCliConfig(): Promise<CliConfig> {
   const envUrl = process.env.OMOIDE_API_URL;
   const envKey = process.env.OMOIDE_API_KEY;
@@ -123,7 +185,7 @@ export class OmoideApiClient {
 
     for (let i = 0; i < hashes.length; i += chunkSize) {
       const chunk = hashes.slice(i, i + chunkSize);
-      const res = await fetch(`${this.baseUrl}/api/v1/photos/check`, {
+      const res = await fetchWithRetry(`${this.baseUrl}/api/v1/photos/check`, {
         method: "POST",
         headers: this.headers({ "content-type": "application/json" }),
         body: JSON.stringify({ hashes: chunk }),
@@ -162,7 +224,7 @@ export class OmoideApiClient {
       );
     }
 
-    const res = await fetch(`${this.baseUrl}/api/v1/photos`, {
+    const res = await fetchWithRetry(`${this.baseUrl}/api/v1/photos`, {
       method: "POST",
       headers: this.headers(),
       body: formData,
@@ -182,7 +244,7 @@ export class OmoideApiClient {
     rawPath: string,
   ): Promise<void> {
     // Request metadata attachment + optional R2 presigned PUT URL
-    const initRes = await fetch(`${this.baseUrl}/api/v1/photos/${photoId}/raw`, {
+    const initRes = await fetchWithRetry(`${this.baseUrl}/api/v1/photos/${photoId}/raw`, {
       method: "POST",
       headers: this.headers({ "content-type": "application/json" }),
       body: JSON.stringify({
@@ -203,7 +265,7 @@ export class OmoideApiClient {
     const rawBytes = new Uint8Array(await readFile(rawPath));
 
     if (initData.presignedPutUrl) {
-      const putRes = await fetch(initData.presignedPutUrl, {
+      const putRes = await fetchWithRetry(initData.presignedPutUrl, {
         method: "PUT",
         headers: { "content-type": "image/x-sony-arw" },
         body: rawBytes,
@@ -215,7 +277,7 @@ export class OmoideApiClient {
     }
 
     // Fallback to Worker streaming PUT endpoint
-    const fallbackRes = await fetch(`${this.baseUrl}/api/v1/photos/${photoId}/asset/raw`, {
+    const fallbackRes = await fetchWithRetry(`${this.baseUrl}/api/v1/photos/${photoId}/asset/raw`, {
       method: "PUT",
       headers: this.headers({ "content-type": "image/x-sony-arw" }),
       body: rawBytes,
@@ -250,7 +312,7 @@ export class OmoideApiClient {
       path.basename(filePath),
     );
 
-    const res = await fetch(`${this.baseUrl}/api/v1/photos/${photoId}/developments`, {
+    const res = await fetchWithRetry(`${this.baseUrl}/api/v1/photos/${photoId}/developments`, {
       method: "POST",
       headers: this.headers(),
       body: formData,
@@ -266,7 +328,7 @@ export class OmoideApiClient {
   }
 
   async addSocialPost(photoId: string, input: CreatePhotoPostRequest): Promise<PhotoPostItem> {
-    const res = await fetch(`${this.baseUrl}/api/v1/photos/${photoId}/posts`, {
+    const res = await fetchWithRetry(`${this.baseUrl}/api/v1/photos/${photoId}/posts`, {
       method: "POST",
       headers: this.headers({ "content-type": "application/json" }),
       body: JSON.stringify(input),
@@ -283,7 +345,7 @@ export class OmoideApiClient {
 
   async listPhotos(params?: Record<string, string>): Promise<ListPhotosResponse> {
     const search = new URLSearchParams(params);
-    const res = await fetch(`${this.baseUrl}/api/v1/photos?${search.toString()}`, {
+    const res = await fetchWithRetry(`${this.baseUrl}/api/v1/photos?${search.toString()}`, {
       headers: this.headers(),
     });
 
