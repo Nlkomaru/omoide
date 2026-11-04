@@ -307,6 +307,26 @@ describe("Omoide REST API (@omoide/web)", () => {
     expect(checked.items[0]?.photoId).toBe(expectedPhotoId);
     expect(checked.items[0]?.hasRaw).toBe(false);
 
+    // 2b. Check that batch checking 500 hashes does not fail Cloudflare D1's 100-parameter limit
+    const largeHashBatch = Array.from({ length: 500 }, (_, i) =>
+      i === 0 ? jpegSha256 : `${i.toString(16).padStart(64, "0")}`,
+    );
+    const largeCheckRes = await app.request(
+      "/api/v1/photos/check",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ hashes: largeHashBatch }),
+      },
+      env,
+    );
+    expect(largeCheckRes.status).toBe(200);
+    const largeChecked = (await largeCheckRes.json()) as {
+      items: Array<{ photoId: string }>;
+    };
+    expect(largeChecked.items).toHaveLength(1);
+    expect(largeChecked.items[0]?.photoId).toBe(expectedPhotoId);
+
     // 3. Attach 1:1 Sony .ARW RAW
     const rawSha256 = "b4e6d9f0c3e215876902b4e6d9f0c3e215876902b4e6d9f0c3e215876902b4e6";
     const rawRes = await app.request(
