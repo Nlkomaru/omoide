@@ -119,7 +119,7 @@ export class OmoideApiClient {
 
   async checkHashes(hashes: string[]): Promise<CheckedPhotoStatus[]> {
     const results: CheckedPhotoStatus[] = [];
-    const chunkSize = 500;
+    const chunkSize = 60; // Stay well below Cloudflare D1's 100-parameter limit per SQL query
 
     for (let i = 0; i < hashes.length; i += chunkSize) {
       const chunk = hashes.slice(i, i + chunkSize);

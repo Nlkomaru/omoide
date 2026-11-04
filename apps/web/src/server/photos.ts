@@ -36,6 +36,18 @@ function buildDevelopmentAssetUrl(photoId: string, developmentId: string): strin
   return `/api/v1/photos/${photoId}/developments/${developmentId}/asset`;
 }
 
+/**
+ * Splits an array into chunks of specified size.
+ * Used to stay safely below Cloudflare D1's 100-parameter limit per SQL query.
+ */
+function chunkArray<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+}
+
 export async function checkExistingPhotos(
   db: AppDatabase,
   userId: string,
@@ -43,32 +55,49 @@ export async function checkExistingPhotos(
 ): Promise<CheckedPhotoStatus[]> {
   if (hashes.length === 0) return [];
 
-  const matchedPhotos = await db
-    .select({
-      id: photos.id,
-      jpegSha256: photos.jpegSha256,
-      hasRaw: photos.hasRaw,
-      isFavorite: photos.isFavorite,
-    })
-    .from(photos)
-    .where(and(eq(photos.userId, userId), inArray(photos.jpegSha256, hashes)));
+  // Cloudflare D1 has a hard limit of 100 bound parameters per query.
+  // We chunk hashes into batches of 60 to safely stay within D1 limits (1 param for userId + 60 for hashes = 61).
+  const hashChunks = chunkArray(hashes, 60);
+  const matchedPhotos: {
+    id: string;
+    jpegSha256: string;
+    hasRaw: boolean;
+    isFavorite: boolean;
+  }[] = [];
+
+  for (const chunk of hashChunks) {
+    const rows = await db
+      .select({
+        id: photos.id,
+        jpegSha256: photos.jpegSha256,
+        hasRaw: photos.hasRaw,
+        isFavorite: photos.isFavorite,
+      })
+      .from(photos)
+      .where(and(eq(photos.userId, userId), inArray(photos.jpegSha256, chunk)));
+    matchedPhotos.push(...rows);
+  }
 
   if (matchedPhotos.length === 0) return [];
 
   const photoIds = matchedPhotos.map((p) => p.id);
-  const devs = await db
-    .select({
-      photoId: photoDevelopments.photoId,
-      sha256: photoDevelopments.sha256,
-    })
-    .from(photoDevelopments)
-    .where(inArray(photoDevelopments.photoId, photoIds));
-
+  const idChunks = chunkArray(photoIds, 60);
   const devMap = new Map<string, string[]>();
-  for (const dev of devs) {
-    const list = devMap.get(dev.photoId) ?? [];
-    list.push(dev.sha256);
-    devMap.set(dev.photoId, list);
+
+  for (const chunk of idChunks) {
+    const devs = await db
+      .select({
+        photoId: photoDevelopments.photoId,
+        sha256: photoDevelopments.sha256,
+      })
+      .from(photoDevelopments)
+      .where(inArray(photoDevelopments.photoId, chunk));
+
+    for (const dev of devs) {
+      const list = devMap.get(dev.photoId) ?? [];
+      list.push(dev.sha256);
+      devMap.set(dev.photoId, list);
+    }
   }
 
   return matchedPhotos.map((p) => ({
@@ -481,28 +510,31 @@ export async function listPhotosForUser(
     .orderBy(desc(photos.takenAt), desc(photos.id));
 
   const photoIds = allUserPhotos.map((p) => p.id);
+  const idChunks = chunkArray(photoIds, 60);
 
-  const devRows =
-    photoIds.length > 0
-      ? await db
-          .select({
-            photoId: photoDevelopments.photoId,
-            id: photoDevelopments.id,
-          })
-          .from(photoDevelopments)
-          .where(inArray(photoDevelopments.photoId, photoIds))
-      : [];
+  const devRows: { photoId: string; id: string }[] = [];
+  for (const chunk of idChunks) {
+    const rows = await db
+      .select({
+        photoId: photoDevelopments.photoId,
+        id: photoDevelopments.id,
+      })
+      .from(photoDevelopments)
+      .where(inArray(photoDevelopments.photoId, chunk));
+    devRows.push(...rows);
+  }
 
-  const postRows =
-    photoIds.length > 0
-      ? await db
-          .select({
-            photoId: photoPosts.photoId,
-            platform: photoPosts.platform,
-          })
-          .from(photoPosts)
-          .where(inArray(photoPosts.photoId, photoIds))
-      : [];
+  const postRows: { photoId: string; platform: SocialPlatform }[] = [];
+  for (const chunk of idChunks) {
+    const rows = await db
+      .select({
+        photoId: photoPosts.photoId,
+        platform: photoPosts.platform,
+      })
+      .from(photoPosts)
+      .where(inArray(photoPosts.photoId, chunk));
+    postRows.push(...rows);
+  }
 
   const devCountByPhoto = new Map<string, number>();
   for (const dev of devRows) {
