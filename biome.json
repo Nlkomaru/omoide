@@ -24,5 +24,10 @@
   },
   "linter": {
     "enabled": true
+  },
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
+    }
   }
 }

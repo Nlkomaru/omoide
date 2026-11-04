@@ -9,12 +9,8 @@ export const Route = createRootRoute({
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Omoide — Photography Archive" },
-      {
-        name: "description",
-        content:
-          "Personal photography archive, RAW & developed variants gallery, and EXIF browser.",
-      },
+      { title: "Omoide" },
+      { name: "description", content: "Personal photo archive." },
     ],
     links: [{ rel: "stylesheet", href: appCss }],
   }),
@@ -24,9 +20,11 @@ export const Route = createRootRoute({
 function RootComponent() {
   return (
     <RootDocument>
-      <Navbar />
-      <div className="min-h-screen bg-white text-[#18181B] md:pl-14">
-        <Outlet />
+      <div className="flex h-dvh flex-col">
+        <Navbar />
+        <div className="flex min-h-0 flex-1 flex-col">
+          <Outlet />
+        </div>
       </div>
     </RootDocument>
   );
@@ -38,7 +36,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
       <head>
         <HeadContent />
       </head>
-      <body className="bg-white text-[#18181B] antialiased selection:bg-[#18181B] selection:text-white">
+      <body className="bg-canvas text-sm text-ink selection:bg-accent/15">
         {children}
         <Scripts />
       </body>

@@ -1,3 +1,4 @@
+/** biome-ignore-all lint/complexity/noImportantStyles: reduced motion must override utility layers */
 @import "@fontsource/poppins/400.css";
 @import "@fontsource/poppins/500.css";
 @import "@fontsource/poppins/600.css";
@@ -6,37 +7,59 @@
 @import "@fontsource/noto-sans-jp/700.css";
 @import "@fontsource/jetbrains-mono/400.css";
 @import "@fontsource/jetbrains-mono/500.css";
-@import "@fontsource/space-mono/400.css";
-@import "@fontsource/space-mono/700.css";
 @import "tailwindcss";
+
+@theme {
+  --font-sans: "Poppins", "Noto Sans JP", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Surfaces */
+  --color-canvas: #fafafa;
+  --color-surface: #ffffff;
+  --color-subtle: #f4f4f5;
+
+  /* Hairlines */
+  --color-line: #e4e4e7;
+  --color-line-strong: #d4d4d8;
+
+  /* Text */
+  --color-ink: #18181b;
+  --color-ink-muted: #52525b;
+  --color-ink-faint: #71717a;
+
+  /* Single accent, plus the semantic colours that are not accents */
+  --color-accent: #2f5bd0;
+  --color-accent-hover: #264bb0;
+  --color-star: #d97706;
+  --color-danger: #b42318;
+}
 
 @layer base {
   :root {
     color-scheme: light;
-    --font-sans: "Poppins", "Noto Sans JP", -apple-system, BlinkMacSystemFont, sans-serif;
-    --font-mono: "JetBrains Mono", monospace;
-    --font-display: "Space Mono", "Poppins", monospace;
   }
 
   html,
   body {
-    background-color: #ffffff;
-    color: #18181b;
-    font-family: var(--font-sans);
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
-}
 
-.font-mono-spec {
-  font-family: var(--font-mono);
-}
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+  }
 
-.font-display-mono {
-  font-family: var(--font-display);
-}
-
-.vertical-brand {
-  writing-mode: vertical-rl;
-  transform: rotate(180deg);
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    ::before,
+    ::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
 }
