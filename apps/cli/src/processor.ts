@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
+import { open, stat } from "node:fs/promises";
 import path from "node:path";
 import {
   type DevelopedFormat,
@@ -30,13 +30,36 @@ export async function computeFileSha256(filePath: string): Promise<string> {
 }
 
 /**
+ * Reads the first chunk (up to 256KB) of a file safely using a managed FileHandle,
+ * ensuring the handle is always closed even on Node v26+ where unclosed handles error on GC.
+ */
+async function readFileHeaderBuffer(filePath: string, maxBytes = 256 * 1024): Promise<Buffer> {
+  const fileStat = await stat(filePath);
+  const bytesToRead = Math.min(fileStat.size, maxBytes);
+  const buffer = Buffer.alloc(bytesToRead);
+
+  const handle = await open(filePath, "r");
+  try {
+    if (bytesToRead > 0) {
+      await handle.read(buffer, 0, bytesToRead, 0);
+    }
+    return buffer;
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
  * Extracts and normalizes Sony α7C EXIF metadata from a `.JPG` or `.ARW` file.
  */
 export async function extractNormalizedExif(filePath: string): Promise<NormalizedExifMetadata> {
   const fileStat = await stat(filePath);
   let rawExif: RawExifInput = {};
   try {
-    const parsed = await exifr.parse(filePath, {
+    // Read the file header buffer explicitly and pass buffer to exifr.parse
+    // to prevent exifr from leaving open FileHandle instances unclosed on Node 26+
+    const headerBuffer = await readFileHeaderBuffer(filePath, 256 * 1024);
+    const parsed = await exifr.parse(headerBuffer, {
       tiff: true,
       exif: true,
       gps: true,
