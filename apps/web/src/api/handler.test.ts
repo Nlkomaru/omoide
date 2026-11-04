@@ -1,5 +1,7 @@
-import { DatabaseSync } from "node:sqlite";
+import { createHash } from "node:crypto";
+import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { uuidv7FromExifTimestamp } from "@omoide/core";
+import { sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { AppDatabase } from "~/db/client";
@@ -118,6 +120,7 @@ function createTestDatabase(): AppDatabase {
       width INTEGER NOT NULL,
       height INTEGER NOT NULL,
       blurhash TEXT,
+      is_favorite INTEGER DEFAULT 0 NOT NULL,
       developed_at INTEGER NOT NULL,
       created_at INTEGER NOT NULL
     );
@@ -126,6 +129,7 @@ function createTestDatabase(): AppDatabase {
       user_id TEXT NOT NULL REFERENCES user(id) ON DELETE CASCADE,
       photo_id TEXT NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
       development_id TEXT REFERENCES photo_developments(id) ON DELETE SET NULL,
+      deleted_version_label TEXT,
       platform TEXT NOT NULL,
       post_url TEXT NOT NULL,
       external_post_id TEXT,
@@ -135,20 +139,38 @@ function createTestDatabase(): AppDatabase {
     );
   `);
 
+  type Method = "run" | "all" | "values" | "get";
+
+  function execute(sql: string, params: unknown[] | undefined, method: Method) {
+    const stmt = sqlite.prepare(sql);
+    stmt.setReturnArrays(true);
+    const boundParams = (params ?? []).map((p) =>
+      typeof p === "boolean" ? (p ? 1 : 0) : p,
+    ) as SQLInputValue[];
+    if (method === "run") {
+      stmt.run(...boundParams);
+      return { rows: [] as unknown[] };
+    }
+    const rows = stmt.all(...boundParams) as unknown as unknown[][];
+    if (method === "get") {
+      return { rows: (rows[0] ?? []) as unknown[] };
+    }
+    return { rows: rows as unknown[] };
+  }
+
   return drizzle(
-    async (sql, params, method) => {
-      const stmt = sqlite.prepare(sql);
-      stmt.setReturnArrays(true);
-      const boundParams = (params ?? []).map((p) => (typeof p === "boolean" ? (p ? 1 : 0) : p));
-      if (method === "run") {
-        stmt.run(...boundParams);
-        return { rows: [] };
+    async (sql, params, method) => execute(sql, params, method),
+    // A transaction, as D1's batch is.
+    async (queries) => {
+      sqlite.exec("BEGIN");
+      try {
+        const results = queries.map((q) => execute(q.sql, q.params, q.method));
+        sqlite.exec("COMMIT");
+        return results;
+      } catch (err) {
+        sqlite.exec("ROLLBACK");
+        throw err;
       }
-      const rows = stmt.all(...boundParams) as unknown as unknown[][];
-      if (method === "get") {
-        return { rows: (rows[0] ?? []) as unknown[] };
-      }
-      return { rows };
     },
     { schema },
   ) as unknown as AppDatabase;
@@ -174,6 +196,9 @@ function createMockR2Bucket() {
           body: buf as ArrayBuffer,
           contentType: options?.httpMetadata?.contentType ?? "application/octet-stream",
         });
+      },
+      async delete(key: string) {
+        store.delete(key);
       },
       async get(key: string) {
         const entry = store.get(key);
@@ -579,6 +604,602 @@ describe("Omoide REST API (@omoide/web)", () => {
         const malformed = await listPage({ limit: "100", cursor });
         expect(malformed.photos).toHaveLength(7);
       }
+    });
+  });
+
+  describe("photo developments", () => {
+    const TAKEN_AT = Date.parse("2026-11-03T08:00:00+09:00");
+    const FOREIGN_USER_ID = "someone-else";
+
+    interface DevelopmentBody {
+      id: string;
+      photoId: string;
+      url: string;
+      sha256: string;
+      label: string;
+      format: string;
+      isFavorite: boolean;
+    }
+
+    interface PostBody {
+      id: string;
+      developmentId: string | null;
+      deletedVersionLabel: string | null;
+    }
+
+    interface DetailBody {
+      isFavorite: boolean;
+      developmentsCount: number;
+      postsCount: number;
+      developments: DevelopmentBody[];
+      posts: PostBody[];
+    }
+
+    function sha256Of(bytes: Uint8Array): string {
+      return createHash("sha256").update(bytes).digest("hex");
+    }
+
+    function metadataFor(bytes: Uint8Array, overrides: Record<string, unknown> = {}) {
+      return {
+        format: "webp",
+        label: "edit",
+        sha256: sha256Of(bytes),
+        byteSize: bytes.byteLength,
+        width: 600,
+        height: 400,
+        blurhash: "LEHV6nWB2yk8pyo0adR*.7kCMdnj",
+        developedAt: TAKEN_AT,
+        ...overrides,
+      };
+    }
+
+    async function createPhoto(index: number): Promise<string> {
+      const res = await app.request(
+        "/api/v1/photos",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            metadata: {
+              originalFilename: `DSC${String(index).padStart(5, "0")}.JPG`,
+              jpegSha256: index.toString(16).repeat(64),
+              jpegByteSize: 1024,
+              width: 6000,
+              height: 4000,
+              exif: { takenAt: TAKEN_AT + index, exifJson: {} },
+            },
+          }),
+        },
+        env,
+      );
+      expect(res.status).toBe(201);
+      return ((await res.json()) as { photoId: string }).photoId;
+    }
+
+    /** Seeds a photo and a version owned by another user, bypassing the API's owner scoping. */
+    async function createForeignDevelopment() {
+      const now = Date.now();
+      const photoId = "foreign-photo";
+      const developmentId = "foreign-development";
+      await db.insert(schema.user).values({
+        id: FOREIGN_USER_ID,
+        name: "someone",
+        email: "someone@example.com",
+      });
+      await db.insert(schema.photos).values({
+        id: photoId,
+        userId: FOREIGN_USER_ID,
+        originalFilename: "FOREIGN.JPG",
+        takenAt: TAKEN_AT,
+        jpegKey: "foreign.jpg",
+        jpegSha256: "f".repeat(64),
+        jpegByteSize: 1024,
+        width: 6000,
+        height: 4000,
+        createdAt: now,
+        updatedAt: now,
+      });
+      await db.insert(schema.photoDevelopments).values({
+        id: developmentId,
+        userId: FOREIGN_USER_ID,
+        photoId,
+        format: "webp",
+        r2Key: "foreign.webp",
+        sha256: "e".repeat(64),
+        byteSize: 1024,
+        width: 600,
+        height: 400,
+        developedAt: now,
+        createdAt: now,
+      });
+      return { photoId, developmentId };
+    }
+
+    function postUpload(photoId: string, metadata: unknown, bytes?: Uint8Array) {
+      const form = new FormData();
+      form.append("metadata", JSON.stringify(metadata));
+      if (bytes) {
+        form.append("file", new Blob([bytes as BlobPart], { type: "image/webp" }), "edit.webp");
+      }
+      return app.request(
+        `/api/v1/photos/${photoId}/developments`,
+        { method: "POST", body: form },
+        env,
+      );
+    }
+
+    async function uploadDevelopment(
+      photoId: string,
+      bytes: Uint8Array,
+      overrides: Record<string, unknown> = {},
+    ): Promise<DevelopmentBody> {
+      const res = await postUpload(photoId, metadataFor(bytes, overrides), bytes);
+      expect(res.status).toBe(201);
+      return ((await res.json()) as { development: DevelopmentBody }).development;
+    }
+
+    function patchDevelopment(photoId: string, developmentId: string, body: unknown) {
+      return app.request(
+        `/api/v1/photos/${photoId}/developments/${developmentId}`,
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        },
+        env,
+      );
+    }
+
+    function postPost(photoId: string, developmentId: string | null | undefined) {
+      return app.request(
+        `/api/v1/photos/${photoId}/posts`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            platform: "instagram",
+            postUrl: "https://www.instagram.com/p/abc/",
+            developmentId,
+          }),
+        },
+        env,
+      );
+    }
+
+    async function getDetail(photoId: string): Promise<DetailBody> {
+      const res = await app.request(`/api/v1/photos/${photoId}`, {}, env);
+      expect(res.status).toBe(200);
+      return (await res.json()) as DetailBody;
+    }
+
+    function failR2Writes() {
+      env.PHOTOS_BUCKET = {
+        ...mockR2.bucket,
+        put: async () => {
+          throw new Error("R2 is unavailable");
+        },
+      } as unknown as R2Bucket;
+    }
+
+    /** A WebP signature is all the route reads of a file's contents. */
+    function webpBytes(contents: string): Uint8Array {
+      return new TextEncoder().encode(`RIFF\0\0\0\0WEBP${contents}`);
+    }
+
+    const FILE = webpBytes("developed-file-bytes");
+
+    it("stores an uploaded file and serves it back from the returned url", async () => {
+      const photoId = await createPhoto(1);
+      const development = await uploadDevelopment(photoId, FILE);
+      expect(development.isFavorite).toBe(false);
+
+      const asset = await app.request(development.url, {}, env);
+      expect(asset.status).toBe(200);
+      expect(asset.headers.get("content-type")).toBe("image/webp");
+      expect(new Uint8Array(await asset.arrayBuffer())).toEqual(FILE);
+    });
+
+    it("sets and clears a version's favorite, without touching the photo's or the facets", async () => {
+      const photoId = await createPhoto(1);
+      const favorited = await uploadDevelopment(photoId, FILE);
+      const other = await uploadDevelopment(photoId, webpBytes("another-file"));
+
+      const res = await patchDevelopment(photoId, favorited.id, { isFavorite: true });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { development: DevelopmentBody };
+      expect(body.development).toMatchObject({ id: favorited.id, photoId, isFavorite: true });
+
+      const detail = await getDetail(photoId);
+      expect(detail.isFavorite).toBe(false);
+      expect(detail.developments.find((d) => d.id === favorited.id)?.isFavorite).toBe(true);
+      expect(detail.developments.find((d) => d.id === other.id)?.isFavorite).toBe(false);
+
+      const listRes = await app.request("/api/v1/photos?favorite=true", {}, env);
+      const list = (await listRes.json()) as {
+        photos: unknown[];
+        facets: { favoriteCount: number };
+      };
+      expect(list.photos).toHaveLength(0);
+      expect(list.facets.favoriteCount).toBe(0);
+
+      const cleared = await patchDevelopment(photoId, favorited.id, { isFavorite: false });
+      expect(cleared.status).toBe(200);
+      const afterClear = await getDetail(photoId);
+      expect(afterClear.developments.find((d) => d.id === favorited.id)?.isFavorite).toBe(false);
+    });
+
+    it("keeps version favorites when the photo's favorite changes", async () => {
+      const photoId = await createPhoto(1);
+      const development = await uploadDevelopment(photoId, FILE);
+      await patchDevelopment(photoId, development.id, { isFavorite: true });
+
+      for (const isFavorite of [true, false]) {
+        const res = await app.request(
+          `/api/v1/photos/${photoId}`,
+          {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ isFavorite }),
+          },
+          env,
+        );
+        expect(res.status).toBe(200);
+        const detail = await getDetail(photoId);
+        expect(detail.isFavorite).toBe(isFavorite);
+        expect(detail.developments[0]?.isFavorite).toBe(true);
+      }
+    });
+
+    it("rejects a favorite update for the wrong photo, the wrong user, or an invalid body", async () => {
+      const photoId = await createPhoto(1);
+      const otherPhotoId = await createPhoto(2);
+      const development = await uploadDevelopment(photoId, FILE);
+      const foreign = await createForeignDevelopment();
+
+      const update = { isFavorite: true };
+      expect((await patchDevelopment(otherPhotoId, development.id, update)).status).toBe(404);
+      expect((await patchDevelopment(photoId, "no-such-version", update)).status).toBe(404);
+      expect((await patchDevelopment(foreign.photoId, foreign.developmentId, update)).status).toBe(
+        404,
+      );
+      expect((await patchDevelopment(photoId, foreign.developmentId, update)).status).toBe(404);
+      expect((await patchDevelopment(photoId, development.id, { isFavorite: "yes" })).status).toBe(
+        400,
+      );
+
+      expect((await getDetail(photoId)).developments[0]?.isFavorite).toBe(false);
+      const foreignRow = await db.select().from(schema.photoDevelopments).all();
+      expect(foreignRow.find((d) => d.id === foreign.developmentId)?.isFavorite).toBe(false);
+    });
+
+    it("keeps the favorite and posts when an existing file is uploaded again", async () => {
+      const photoId = await createPhoto(1);
+      const development = await uploadDevelopment(photoId, FILE);
+      await patchDevelopment(photoId, development.id, { isFavorite: true });
+      const postRes = await postPost(photoId, development.id);
+      expect(postRes.status).toBe(201);
+
+      const again = await uploadDevelopment(photoId, FILE, { label: "renamed" });
+      expect(again).toMatchObject({ id: development.id, label: "renamed", isFavorite: true });
+
+      const detail = await getDetail(photoId);
+      expect(detail.developmentsCount).toBe(1);
+      expect(detail.developments[0]).toMatchObject({ id: development.id, isFavorite: true });
+      expect(detail.posts).toHaveLength(1);
+      expect(detail.posts[0]?.developmentId).toBe(development.id);
+    });
+
+    it("accepts the same file as a version of two photos", async () => {
+      const first = await createPhoto(1);
+      const second = await createPhoto(2);
+
+      const a = await uploadDevelopment(first, FILE);
+      const b = await uploadDevelopment(second, FILE);
+
+      expect(a.id).not.toBe(b.id);
+      expect((await getDetail(first)).developments.map((d) => d.id)).toEqual([a.id]);
+      expect((await getDetail(second)).developments.map((d) => d.id)).toEqual([b.id]);
+    });
+
+    it("records a post against a version of the same photo", async () => {
+      const photoId = await createPhoto(1);
+      const development = await uploadDevelopment(photoId, FILE);
+
+      const res = await postPost(photoId, development.id);
+      expect(res.status).toBe(201);
+      const { post } = (await res.json()) as { post: PostBody };
+      expect(post.developmentId).toBe(development.id);
+
+      const detail = await getDetail(photoId);
+      expect(detail.posts.map((p) => p.developmentId)).toEqual([development.id]);
+    });
+
+    it("still records a post on the original when developmentId is null or absent", async () => {
+      const photoId = await createPhoto(1);
+
+      expect((await postPost(photoId, null)).status).toBe(201);
+      expect((await postPost(photoId, undefined)).status).toBe(201);
+
+      const detail = await getDetail(photoId);
+      expect(detail.posts.map((p) => p.developmentId)).toEqual([null, null]);
+    });
+
+    it("rejects a post on a version it does not own, without inserting", async () => {
+      const photoId = await createPhoto(1);
+      const otherPhotoId = await createPhoto(2);
+      const otherPhotosVersion = await uploadDevelopment(otherPhotoId, FILE);
+      const foreign = await createForeignDevelopment();
+
+      for (const developmentId of [
+        otherPhotosVersion.id,
+        foreign.developmentId,
+        "no-such-version",
+        "",
+      ]) {
+        expect((await postPost(photoId, developmentId)).status).toBe(400);
+      }
+      expect((await postPost("no-such-photo", null)).status).toBe(404);
+
+      expect((await getDetail(photoId)).posts).toHaveLength(0);
+      expect(await db.select().from(schema.photoPosts).all()).toHaveLength(0);
+    });
+
+    it("rejects a file whose size or hash differs from the metadata", async () => {
+      const photoId = await createPhoto(1);
+
+      const wrongSize = await postUpload(
+        photoId,
+        metadataFor(FILE, { byteSize: FILE.byteLength + 1 }),
+        FILE,
+      );
+      expect(wrongSize.status).toBe(400);
+
+      const wrongHash = await postUpload(
+        photoId,
+        metadataFor(FILE, { sha256: "0".repeat(64) }),
+        FILE,
+      );
+      expect(wrongHash.status).toBe(400);
+
+      expect((await getDetail(photoId)).developments).toHaveLength(0);
+      expect(mockR2.store.size).toBe(0);
+    });
+
+    it("rejects a file whose contents aren't the declared format", async () => {
+      const photoId = await createPhoto(1);
+      const notAnImage = new TextEncoder().encode("<html><script>alert(1)</script>");
+
+      expect((await postUpload(photoId, metadataFor(notAnImage), notAnImage)).status).toBe(400);
+      expect((await postUpload(photoId, metadataFor(FILE, { format: "png" }), FILE)).status).toBe(
+        400,
+      );
+
+      expect((await getDetail(photoId)).developments).toHaveLength(0);
+      expect(mockR2.store.size).toBe(0);
+    });
+
+    it("serves stored files with sniffing turned off", async () => {
+      const photoId = await createPhoto(1);
+      const development = await uploadDevelopment(photoId, FILE);
+
+      const asset = await app.request(development.url, {}, env);
+
+      expect(asset.headers.get("x-content-type-options")).toBe("nosniff");
+    });
+
+    it("leaves an existing row alone when only metadata is sent again", async () => {
+      const photoId = await createPhoto(1);
+      const development = await uploadDevelopment(photoId, FILE);
+
+      const res = await app.request(
+        `/api/v1/photos/${photoId}/developments`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(metadataFor(FILE, { format: "avif", byteSize: 999, width: 7 })),
+        },
+        env,
+      );
+
+      expect(res.status).toBe(201);
+      expect(((await res.json()) as { development: DevelopmentBody }).development.id).toBe(
+        development.id,
+      );
+      const stored = (await getDetail(photoId)).developments[0];
+      expect(stored).toMatchObject({ format: "webp", byteSize: FILE.byteLength, width: 600 });
+      expect((await app.request(development.url, {}, env)).status).toBe(200);
+    });
+
+    it("refuses a re-upload that would move a stored version to another format", async () => {
+      const photoId = await createPhoto(1);
+      const registered = await app.request(
+        `/api/v1/photos/${photoId}/developments`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(metadataFor(FILE, { format: "png" })),
+        },
+        env,
+      );
+      expect(registered.status).toBe(201);
+
+      const res = await postUpload(photoId, metadataFor(FILE), FILE);
+
+      expect(res.status).toBe(400);
+      expect((await getDetail(photoId)).developments[0]?.format).toBe("png");
+      expect(mockR2.store.size).toBe(0);
+    });
+
+    it("describes the upload and favorite routes in the OpenAPI document", async () => {
+      const res = await app.request("/api/openapi", {}, env);
+      const { paths } = (await res.json()) as {
+        paths: Record<
+          string,
+          Record<string, { requestBody?: unknown; responses: Record<string, unknown> }>
+        >;
+      };
+
+      const upload = paths["/api/v1/photos/{id}/developments"]?.post;
+      expect(Object.keys(upload?.responses ?? {})).toEqual(["201", "400", "404"]);
+      expect(upload?.requestBody).toBeDefined();
+      const favorite = paths["/api/v1/photos/{id}/developments/{devId}"]?.patch;
+      expect(Object.keys(favorite?.responses ?? {})).toEqual(["200", "400", "404"]);
+      expect(favorite?.requestBody).toBeDefined();
+    });
+
+    it("rejects a multipart upload with no file", async () => {
+      const photoId = await createPhoto(1);
+
+      const res = await postUpload(photoId, metadataFor(FILE));
+
+      expect(res.status).toBe(400);
+      expect((await getDetail(photoId)).developments).toHaveLength(0);
+    });
+
+    it("writes no row when storing a new file fails", async () => {
+      const photoId = await createPhoto(1);
+      failR2Writes();
+
+      const res = await postUpload(photoId, metadataFor(FILE), FILE);
+
+      expect(res.status).toBe(500);
+      expect((await getDetail(photoId)).developments).toHaveLength(0);
+    });
+
+    it("leaves the existing row alone when storing a re-upload fails", async () => {
+      const photoId = await createPhoto(1);
+      await uploadDevelopment(photoId, FILE);
+      failR2Writes();
+
+      const res = await postUpload(photoId, metadataFor(FILE, { label: "renamed" }), FILE);
+
+      expect(res.status).toBe(500);
+      expect((await getDetail(photoId)).developments[0]?.label).toBe("edit");
+    });
+
+    function deleteDevelopment(photoId: string, developmentId: string) {
+      return app.request(
+        `/api/v1/photos/${photoId}/developments/${developmentId}`,
+        { method: "DELETE" },
+        env,
+      );
+    }
+
+    it("deletes a version's row and file, and the photo stops counting as developed", async () => {
+      const photoId = await createPhoto(1);
+      const kept = await uploadDevelopment(photoId, webpBytes("kept"));
+      const development = await uploadDevelopment(photoId, FILE);
+      expect(mockR2.store.size).toBeGreaterThanOrEqual(2);
+      const objectsBefore = mockR2.store.size;
+
+      const res = await deleteDevelopment(photoId, development.id);
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ ok: true, deletedVersionLabel: "WEBP · edit" });
+
+      expect(mockR2.store.size).toBe(objectsBefore - 1);
+      expect((await app.request(development.url, {}, env)).status).toBe(404);
+      const detail = await getDetail(photoId);
+      expect(detail.developments.map((d) => d.id)).toEqual([kept.id]);
+      expect(detail.developmentsCount).toBe(1);
+
+      await deleteDevelopment(photoId, kept.id);
+      const listRes = await app.request("/api/v1/photos?hasDeveloped=true", {}, env);
+      const list = (await listRes.json()) as {
+        photos: unknown[];
+        facets: { developedCount: number };
+      };
+      expect(list.photos).toHaveLength(0);
+      expect(list.facets.developedCount).toBe(0);
+    });
+
+    it("keeps a deleted version's posts, named, and doesn't call them posts of the original", async () => {
+      const photoId = await createPhoto(1);
+      const development = await uploadDevelopment(photoId, FILE);
+      const other = await uploadDevelopment(photoId, webpBytes("other"), { label: "print" });
+      await postPost(photoId, development.id);
+      await postPost(photoId, other.id);
+      await postPost(photoId, null);
+
+      expect((await deleteDevelopment(photoId, development.id)).status).toBe(200);
+
+      const { posts, postsCount } = await getDetail(photoId);
+      expect(postsCount).toBe(3);
+      const targets = posts.map((p) => [p.developmentId, p.deletedVersionLabel]);
+      expect(targets).toContainEqual([null, "WEBP · edit"]);
+      expect(targets).toContainEqual([other.id, null]);
+      expect(targets).toContainEqual([null, null]);
+    });
+
+    it("rolls back the posts' new name when the row can't be deleted", async () => {
+      const photoId = await createPhoto(1);
+      const development = await uploadDevelopment(photoId, FILE);
+      await postPost(photoId, development.id);
+      const batch = db.batch.bind(db);
+      db.batch = ((queries: Parameters<typeof batch>[0]) =>
+        batch([...queries, db.run(sql`SELECT * FROM no_such_table`)] as never)) as typeof db.batch;
+
+      expect((await deleteDevelopment(photoId, development.id)).status).toBe(500);
+
+      db.batch = batch;
+      const { posts, developments } = await getDetail(photoId);
+      expect(developments).toHaveLength(1);
+      expect(posts[0]).toMatchObject({ developmentId: development.id, deletedVersionLabel: null });
+    });
+
+    it("refuses to delete for the wrong photo or user, and deleting twice is a 404", async () => {
+      const photoId = await createPhoto(1);
+      const otherPhotoId = await createPhoto(2);
+      const development = await uploadDevelopment(photoId, FILE);
+      const foreign = await createForeignDevelopment();
+      mockR2.store.set("foreign.webp", { body: new ArrayBuffer(1), contentType: "image/webp" });
+
+      expect((await deleteDevelopment(otherPhotoId, development.id)).status).toBe(404);
+      expect((await deleteDevelopment(photoId, foreign.developmentId)).status).toBe(404);
+      expect((await deleteDevelopment(foreign.photoId, foreign.developmentId)).status).toBe(404);
+      expect((await getDetail(photoId)).developments).toHaveLength(1);
+      expect(mockR2.store.has("foreign.webp")).toBe(true);
+      const rows = await db.select().from(schema.photoDevelopments).all();
+      expect(rows.some((d) => d.id === foreign.developmentId)).toBe(true);
+
+      expect((await deleteDevelopment(photoId, development.id)).status).toBe(200);
+      expect((await deleteDevelopment(photoId, development.id)).status).toBe(404);
+    });
+
+    it("keeps the row and posts when removing the file fails, and a retry finishes", async () => {
+      const photoId = await createPhoto(1);
+      const development = await uploadDevelopment(photoId, FILE);
+      await postPost(photoId, development.id);
+      const bucket = env.PHOTOS_BUCKET;
+      env.PHOTOS_BUCKET = {
+        ...mockR2.bucket,
+        delete: async () => {
+          throw new Error("R2 is unavailable");
+        },
+      } as unknown as R2Bucket;
+
+      expect((await deleteDevelopment(photoId, development.id)).status).toBe(500);
+      const detail = await getDetail(photoId);
+      expect(detail.developments).toHaveLength(1);
+      expect(detail.posts[0]).toMatchObject({
+        developmentId: development.id,
+        deletedVersionLabel: null,
+      });
+      expect((await app.request(development.url, {}, env)).status).toBe(200);
+
+      env.PHOTOS_BUCKET = bucket;
+      expect((await deleteDevelopment(photoId, development.id)).status).toBe(200);
+      expect((await getDetail(photoId)).developments).toHaveLength(0);
+    });
+
+    it("lets a deleted file be uploaded again as a new version", async () => {
+      const photoId = await createPhoto(1);
+      const development = await uploadDevelopment(photoId, FILE);
+      await deleteDevelopment(photoId, development.id);
+
+      const again = await uploadDevelopment(photoId, FILE);
+
+      expect((await app.request(again.url, {}, env)).status).toBe(200);
+      expect((await getDetail(photoId)).developmentsCount).toBe(1);
     });
   });
 

@@ -1,16 +1,71 @@
-import type { ApiPhotoDetail, PhotoPostItem, SocialPlatform } from "@omoide/core";
-import { Download, ExternalLink, Star, Trash2, X } from "lucide-react";
-import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from "react";
+import type {
+  ApiPhotoDetail,
+  ApiPhotoSummary,
+  PhotoDevelopmentItem,
+  PhotoPostItem,
+  SocialPlatform,
+} from "@omoide/core";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  ExternalLink,
+  LoaderCircle,
+  Star,
+  Trash2,
+  X,
+} from "lucide-react";
+import {
+  type CSSProperties,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from "react";
+import { DevelopedVersions } from "~/components/DevelopedVersions";
 import { Badge, Button, IconButton, Select, TextInput } from "~/components/ui";
 import { formatBytes, formatCaptureTime, isRecorded } from "~/lib/format";
+import {
+  countPostsByDevelopment,
+  downloadFilename,
+  ORIGINAL_VARIANT,
+  versionLabels,
+  withDevelopment,
+  withDevelopmentFavorite,
+  withoutDevelopment,
+  withPosts,
+} from "~/lib/photoVersions";
+import { useDevelopmentUploads } from "~/lib/useDevelopmentUploads";
 
 interface PhotoLightboxProps {
   photoId: string | null;
+  /** The list's copy of the photo, on screen until its details arrive. */
+  summary: ApiPhotoSummary | undefined;
+  /** Where the photo sits in the list, from 1. Zero if the list no longer has it. */
+  position: number;
+  total: number;
+  hasPrevious: boolean;
+  hasNext: boolean;
+  waitingForNext: boolean;
+  nextFailed: boolean;
+  onPrevious: () => void;
+  onNext: () => void;
   onClose: () => void;
   onPhotoUpdated: (updated: ApiPhotoDetail) => void;
 }
 
 const EM_DASH = "—";
+
+interface VersionChange {
+  photoId: string;
+  apply: (detail: ApiPhotoDetail) => ApiPhotoDetail;
+}
+
+function formatCount(value: number) {
+  return value.toLocaleString("en-US");
+}
 
 const PLATFORM_LABELS: Record<SocialPlatform, string> = {
   instagram: "Instagram",
@@ -26,31 +81,126 @@ const FOCUSABLE_SELECTOR =
 /** The default outline colour is too quiet on the dark stage. */
 const STAGE_FOCUS = "focus-visible:outline-white";
 
+/** Holding an arrow key still moves along, at a pace the photos have a chance to show. */
+const ARROW_REPEAT_MS = 150;
+
 const STAGE_ACTION = `inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-white/15 px-2 text-xs font-medium whitespace-nowrap text-white/85 transition-colors hover:bg-white/10 hover:text-white [&_svg]:size-3.5 ${STAGE_FOCUS}`;
 
-export function PhotoLightbox({ photoId, onClose, onPhotoUpdated }: PhotoLightboxProps) {
-  const [detail, setDetail] = useState<ApiPhotoDetail | null>(null);
+/** Arrow keys in these already mean something, and a pending question shouldn't vanish. */
+function keepsArrowKeys(target: EventTarget | null) {
+  return (
+    target instanceof Element &&
+    target.closest("input, textarea, select, [contenteditable], [data-keep-arrow-keys]") !== null
+  );
+}
+
+export function PhotoLightbox({
+  photoId,
+  summary,
+  position,
+  total,
+  hasPrevious,
+  hasNext,
+  waitingForNext,
+  nextFailed,
+  onPrevious,
+  onNext,
+  onClose,
+  onPhotoUpdated,
+}: PhotoLightboxProps) {
+  const [loadedDetail, setDetail] = useState<ApiPhotoDetail | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
-  const [selectedVariantId, setSelectedVariantId] = useState<string>("original");
+  const [selectedVariantId, setSelectedVariantId] = useState<string>(ORIGINAL_VARIANT);
   const [newPlatform, setNewPlatform] = useState<SocialPlatform>("instagram");
   const [newPostUrl, setNewPostUrl] = useState("");
   const [newCaption, setNewCaption] = useState("");
+  /** The version the user picked for the next post. Null follows the stage. */
+  const [postTarget, setPostTarget] = useState<string | null>(null);
   const [submittingPost, setSubmittingPost] = useState(false);
+  const [postError, setPostError] = useState<string | null>(null);
+  /** The version whose favorite last failed to save. */
+  const [favoriteFailedId, setFavoriteFailedId] = useState<string | null>(null);
+  const [deletingIds, setDeletingIds] = useState<ReadonlySet<string>>(new Set());
+  /** Not cleared by moving to another photo, so a late failure is there on coming back. */
+  const [deleteFailedId, setDeleteFailedId] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const postTargetId = useId();
+  /** The photo on screen right now, for responses that arrive after it may have changed. */
+  const detailRef = useRef<ApiPhotoDetail | null>(null);
+  /**
+   * Uploads and deletes saved this session, in order. A detail request that was already running can
+   * answer with the photo as it was, so its response gets the ones saved since it started.
+   */
+  const savedVersionChangesRef = useRef<VersionChange[]>([]);
+  const favoritesInFlightRef = useRef(new Set<string>());
+  const lastArrowRef = useRef(0);
+  // A render can see the new photo before the effect below has cleared the old one's details.
+  const detail = loadedDetail?.id === photoId ? loadedDetail : null;
+
+  const showDetail = useCallback((next: ApiPhotoDetail | null) => {
+    detailRef.current = next;
+    setDetail(next);
+  }, []);
+
+  /**
+   * Applies a saved change to the photo it belongs to. If the view has moved on, nothing on screen
+   * changes and only that photo's table row is brought up to date.
+   */
+  const applySavedChange = useCallback(
+    async (targetId: string, update: (current: ApiPhotoDetail) => ApiPhotoDetail) => {
+      const current = detailRef.current;
+      if (current?.id === targetId) {
+        const next = update(current);
+        showDetail(next);
+        onPhotoUpdated(next);
+        return;
+      }
+      try {
+        const res = await fetch(`/api/v1/photos/${targetId}`);
+        if (res.ok) onPhotoUpdated((await res.json()) as ApiPhotoDetail);
+      } catch {
+        // The row catches up on the next list refresh.
+      }
+    },
+    [onPhotoUpdated, showDetail],
+  );
+
+  const handleUploaded = useCallback(
+    async (targetId: string, development: PhotoDevelopmentItem) => {
+      savedVersionChangesRef.current.push({
+        photoId: targetId,
+        apply: (current) => withDevelopment(current, development),
+      });
+      await applySavedChange(targetId, (current) => withDevelopment(current, development));
+    },
+    [applySavedChange],
+  );
+
+  const uploads = useDevelopmentUploads(handleUploaded);
 
   useEffect(() => {
-    setDetail(null);
+    showDetail(null);
     setLoadFailed(false);
-    setSelectedVariantId("original");
+    setSelectedVariantId(ORIGINAL_VARIANT);
+    setPostTarget(null);
+    setPostError(null);
+    setFavoriteFailedId(null);
+    // An unsent post is about the photo it was typed under.
+    setNewPostUrl("");
+    setNewCaption("");
     if (!photoId) return;
 
     let cancelled = false;
+    const changesAtStart = savedVersionChangesRef.current.length;
     fetch(`/api/v1/photos/${photoId}`)
       .then((res) => (res.ok ? (res.json() as Promise<ApiPhotoDetail>) : null))
       .then((data) => {
         if (cancelled) return;
         if (data) {
-          setDetail(data);
+          const savedSince = savedVersionChangesRef.current
+            .slice(changesAtStart)
+            .filter((change) => change.photoId === photoId);
+          showDetail(savedSince.reduce((shown, change) => change.apply(shown), data));
         } else {
           setLoadFailed(true);
         }
@@ -62,7 +212,7 @@ export function PhotoLightbox({ photoId, onClose, onPhotoUpdated }: PhotoLightbo
     return () => {
       cancelled = true;
     };
-  }, [photoId]);
+  }, [photoId, showDetail]);
 
   useEffect(() => {
     if (!photoId) return;
@@ -71,6 +221,22 @@ export function PhotoLightbox({ photoId, onClose, onPhotoUpdated }: PhotoLightbo
       // Escape during IME composition cancels the composition, not the dialog.
       if (e.key === "Escape" && !e.isComposing) {
         onClose();
+        return;
+      }
+      if (
+        (e.key === "ArrowLeft" || e.key === "ArrowRight") &&
+        !e.isComposing &&
+        !e.altKey &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.shiftKey &&
+        !keepsArrowKeys(e.target)
+      ) {
+        e.preventDefault();
+        if (e.repeat && e.timeStamp - lastArrowRef.current < ARROW_REPEAT_MS) return;
+        lastArrowRef.current = e.timeStamp;
+        if (e.key === "ArrowLeft") onPrevious();
+        else onNext();
         return;
       }
       if (e.key !== "Tab" || !panelRef.current) return;
@@ -94,10 +260,11 @@ export function PhotoLightbox({ photoId, onClose, onPhotoUpdated }: PhotoLightbo
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [photoId, onClose]);
+  }, [photoId, onClose, onPrevious, onNext]);
 
+  const isOpen = photoId !== null;
   useEffect(() => {
-    if (!photoId) return;
+    if (!isOpen) return;
 
     const previouslyFocused = document.activeElement;
     // The panel, not a control: focusing a control can draw its ring after a mouse click. Stacked
@@ -109,17 +276,27 @@ export function PhotoLightbox({ photoId, onClose, onPhotoUpdated }: PhotoLightbo
         previouslyFocused.focus({ preventScroll: true });
       }
     };
-  }, [photoId]);
+  }, [isOpen]);
+
+  // Moving on can remove the control that held the focus, which would leave the dialog behind.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs when the rows have just changed
+  useEffect(() => {
+    if (isOpen && document.activeElement === document.body) {
+      panelRef.current?.focus({ preventScroll: true });
+    }
+  }, [isOpen, photoId, detail === null]);
 
   if (!photoId) return null;
 
+  const photo = detail ?? (summary?.id === photoId ? summary : null);
+  const postOf = postTarget ?? selectedVariantId;
   const activeDevelopment = detail?.developments.find((d) => d.id === selectedVariantId);
-  const activeImageUrl = activeDevelopment ? activeDevelopment.url : (detail?.jpegUrl ?? "");
-  const activeWidth = activeDevelopment ? activeDevelopment.width : (detail?.width ?? 0);
-  const activeHeight = activeDevelopment ? activeDevelopment.height : (detail?.height ?? 0);
+  const activeImageUrl = activeDevelopment ? activeDevelopment.url : (photo?.jpegUrl ?? "");
+  const activeWidth = activeDevelopment ? activeDevelopment.width : (photo?.width ?? 0);
+  const activeHeight = activeDevelopment ? activeDevelopment.height : (photo?.height ?? 0);
   const activeByteSize = activeDevelopment
     ? activeDevelopment.byteSize
-    : (detail?.jpegByteSize ?? 0);
+    : (photo?.jpegByteSize ?? 0);
 
   async function handleToggleFavorite() {
     if (!detail) return;
@@ -129,42 +306,134 @@ export function PhotoLightbox({ photoId, onClose, onPhotoUpdated }: PhotoLightbo
       body: JSON.stringify({ isFavorite: !detail.isFavorite }),
     });
     if (res.ok) {
-      const updated = (await res.json()) as ApiPhotoDetail;
-      setDetail(updated);
-      onPhotoUpdated(updated);
+      const { isFavorite, updatedAt } = (await res.json()) as ApiPhotoDetail;
+      await applySavedChange(detail.id, (current) => ({ ...current, isFavorite, updatedAt }));
+    }
+  }
+
+  /** Changes the star on screen only. A version's favorite moves nothing in the table. */
+  function showVersionFavorite(targetId: string, developmentId: string, isFavorite: boolean) {
+    const current = detailRef.current;
+    if (current?.id === targetId) {
+      showDetail(withDevelopmentFavorite(current, developmentId, isFavorite));
+    }
+  }
+
+  async function handleToggleVersionFavorite(development: PhotoDevelopmentItem) {
+    const { id, photoId: targetId, isFavorite: previous } = development;
+    if (favoritesInFlightRef.current.has(id)) return;
+    favoritesInFlightRef.current.add(id);
+    setFavoriteFailedId(null);
+    showVersionFavorite(targetId, id, !previous);
+
+    let saved: boolean | null = null;
+    try {
+      const res = await fetch(`/api/v1/photos/${targetId}/developments/${id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ isFavorite: !previous }),
+      });
+      if (res.ok) {
+        const body = (await res.json()) as { development: PhotoDevelopmentItem };
+        saved = body.development.isFavorite;
+      }
+    } catch {
+      // Handled below, the same as a refused request.
+    } finally {
+      favoritesInFlightRef.current.delete(id);
+    }
+
+    showVersionFavorite(targetId, id, saved ?? previous);
+    if (saved === null && detailRef.current?.id === targetId) {
+      setFavoriteFailedId(id);
+    }
+  }
+
+  async function handleDeleteVersion(development: PhotoDevelopmentItem) {
+    const { id, photoId: targetId } = development;
+    const leaveVersion = () => {
+      setSelectedVariantId((variant) => (variant === id ? ORIGINAL_VARIANT : variant));
+      setPostTarget((target) => (target === id ? null : target));
+    };
+    setDeleteFailedId(null);
+    setDeletingIds((ids) => new Set(ids).add(id));
+    try {
+      const res = await fetch(`/api/v1/photos/${targetId}/developments/${id}`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        const { deletedVersionLabel, updatedAt } = (await res.json()) as {
+          deletedVersionLabel: string;
+          updatedAt: number;
+        };
+        savedVersionChangesRef.current.push({
+          photoId: targetId,
+          apply: (current) => withoutDevelopment(current, id, deletedVersionLabel),
+        });
+        leaveVersion();
+        await applySavedChange(targetId, (current) => ({
+          ...withoutDevelopment(current, id, deletedVersionLabel),
+          updatedAt,
+        }));
+      } else if (res.status === 404) {
+        // Already gone, from another tab or the CLI. What's stored now is the answer.
+        const fresh = await fetch(`/api/v1/photos/${targetId}`);
+        if (!fresh.ok) throw new Error("Could not reload the photo");
+        const stored = (await fresh.json()) as ApiPhotoDetail;
+        leaveVersion();
+        await applySavedChange(targetId, () => stored);
+      } else {
+        setDeleteFailedId(id);
+      }
+    } catch {
+      setDeleteFailedId(id);
+    } finally {
+      setDeletingIds((ids) => {
+        const remaining = new Set(ids);
+        remaining.delete(id);
+        return remaining;
+      });
     }
   }
 
   async function handleAddPost(e: React.FormEvent) {
     e.preventDefault();
     if (!detail || !newPostUrl.trim()) return;
+    const targetId = detail.id;
+    const stillOpen = () => detailRef.current?.id === targetId;
+    const sentUrl = newPostUrl;
+    const sentCaption = newCaption;
     setSubmittingPost(true);
+    setPostError(null);
     try {
-      const res = await fetch(`/api/v1/photos/${detail.id}/posts`, {
+      const res = await fetch(`/api/v1/photos/${targetId}/posts`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           platform: newPlatform,
           postUrl: newPostUrl.trim(),
           caption: newCaption.trim() || null,
-          developmentId: selectedVariantId !== "original" ? selectedVariantId : null,
+          developmentId: postOf !== ORIGINAL_VARIANT ? postOf : null,
         }),
       });
       if (res.ok) {
         const { post } = (await res.json()) as { post: PhotoPostItem };
-        const nextPosts = [post, ...detail.posts];
-        const nextPlatforms = Array.from(new Set(nextPosts.map((p) => p.platform)));
-        const updated: ApiPhotoDetail = {
-          ...detail,
-          posts: nextPosts,
-          postsCount: nextPosts.length,
-          platforms: nextPlatforms,
-        };
-        setDetail(updated);
-        onPhotoUpdated(updated);
-        setNewPostUrl("");
-        setNewCaption("");
+        const open = stillOpen();
+        await applySavedChange(targetId, (current) =>
+          withPosts(current, [post, ...current.posts.filter((p) => p.id !== post.id)]),
+        );
+        // Whatever was typed since, perhaps for another photo, isn't this post.
+        setNewPostUrl((url) => (url === sentUrl ? "" : url));
+        setNewCaption((caption) => (caption === sentCaption ? "" : caption));
+        if (open) setPostTarget(null);
+      } else if (stillOpen()) {
+        const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
+        setPostError(
+          typeof body?.error === "string" ? body.error : `Could not add the post (${res.status}).`,
+        );
       }
+    } catch {
+      if (stillOpen()) setPostError("Could not add the post. Check your connection.");
     } finally {
       setSubmittingPost(false);
     }
@@ -176,21 +445,20 @@ export function PhotoLightbox({ photoId, onClose, onPhotoUpdated }: PhotoLightbo
       method: "DELETE",
     });
     if (res.ok) {
-      const nextPosts = detail.posts.filter((p) => p.id !== postId);
-      const nextPlatforms = Array.from(new Set(nextPosts.map((p) => p.platform)));
-      const updated: ApiPhotoDetail = {
-        ...detail,
-        posts: nextPosts,
-        postsCount: nextPosts.length,
-        platforms: nextPlatforms,
-      };
-      setDetail(updated);
-      onPhotoUpdated(updated);
+      await applySavedChange(detail.id, (current) =>
+        withPosts(
+          current,
+          current.posts.filter((p) => p.id !== postId),
+        ),
+      );
     }
   }
 
-  const exif = detail?.exifJson;
-  const hasVariants = (detail?.developments.length ?? 0) > 0;
+  const exif = photo?.exifJson;
+  // The count comes with the summary, so the stage holds still while the versions load.
+  const hasVariants = (photo?.developmentsCount ?? 0) > 0;
+  const labels = versionLabels(detail?.developments ?? []);
+  const photoUploads = uploads.items.filter((u) => u.photoId === photoId);
 
   return (
     // Keyboard users close with Escape, handled by the window listener above.
@@ -198,10 +466,19 @@ export function PhotoLightbox({ photoId, onClose, onPhotoUpdated }: PhotoLightbo
     <div
       role="dialog"
       aria-modal="true"
-      aria-label={detail?.originalFilename ?? "Photo details"}
+      aria-label={photo?.originalFilename ?? "Photo details"}
       className="fixed inset-0 z-50 bg-black/50 md:p-4"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
+      }}
+      // A file dropped just outside the upload area must not navigate away from the page.
+      onDragOver={(e) => {
+        if (e.defaultPrevented || !e.dataTransfer.types.includes("Files")) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "none";
+      }}
+      onDrop={(e) => {
+        if (e.dataTransfer.types.includes("Files")) e.preventDefault();
       }}
     >
       <div
@@ -212,26 +489,34 @@ export function PhotoLightbox({ photoId, onClose, onPhotoUpdated }: PhotoLightbo
         {/* Stage */}
         <div
           className={`flex shrink-0 flex-col bg-zinc-950 text-white lg:h-auto lg:min-w-0 lg:flex-1 lg:shrink ${
-            detail ? "" : "h-[60dvh]"
+            photo ? "" : "h-[60dvh]"
           }`}
         >
-          {hasVariants && detail && (
+          {hasVariants && (
             <div className="flex shrink-0 px-3 py-2">
-              <fieldset className="flex max-w-full gap-0.5 overflow-x-auto rounded-md border-0 bg-white/10 p-0.5">
+              <fieldset className="flex max-w-full min-w-0 gap-0.5 overflow-x-auto rounded-md border-0 bg-white/10 p-0.5">
                 <legend className="sr-only">Version</legend>
                 <VariantButton
-                  selected={selectedVariantId === "original"}
-                  onSelect={() => setSelectedVariantId("original")}
+                  selected={selectedVariantId === ORIGINAL_VARIANT}
+                  onSelect={() => setSelectedVariantId(ORIGINAL_VARIANT)}
                 >
                   Original
                 </VariantButton>
-                {detail.developments.map((dev) => (
+                {detail?.developments.map((dev) => (
                   <VariantButton
                     key={dev.id}
                     selected={selectedVariantId === dev.id}
                     onSelect={() => setSelectedVariantId(dev.id)}
                   >
-                    {dev.format.toUpperCase()} · {dev.label}
+                    {dev.isFavorite && (
+                      <>
+                        <Star aria-hidden="true" className="size-3 fill-star text-star" />
+                        <span className="sr-only">Favorite: </span>
+                      </>
+                    )}
+                    <span title={labels.get(dev.id)} className="max-w-40 truncate">
+                      {labels.get(dev.id)}
+                    </span>
                   </VariantButton>
                 ))}
               </fieldset>
@@ -241,22 +526,34 @@ export function PhotoLightbox({ photoId, onClose, onPhotoUpdated }: PhotoLightbo
           {/* Stacked layouts size the stage to the photo, so a landscape shot gets no black bands. */}
           <div
             style={
-              detail && activeWidth > 0 && activeHeight > 0
+              photo && activeWidth > 0 && activeHeight > 0
                 ? ({ "--stage-aspect": `${activeWidth} / ${activeHeight}` } as CSSProperties)
                 : undefined
             }
             className={`relative min-h-0 ${
-              detail
+              photo
                 ? "aspect-(--stage-aspect,3/2) max-h-[60dvh] lg:aspect-auto lg:max-h-none lg:flex-1"
                 : "flex-1"
             }`}
           >
-            {detail ? (
-              <img
-                src={activeImageUrl}
-                alt={detail.originalFilename}
-                className="absolute inset-0 size-full object-contain"
-              />
+            {photo ? (
+              <>
+                {/* The table already loaded the thumbnail, so a step shows the right photo at once. */}
+                {!activeDevelopment && photo.thumbUrl && (
+                  <img
+                    src={photo.thumbUrl}
+                    alt=""
+                    className="absolute inset-0 size-full object-contain"
+                  />
+                )}
+                {/* Keyed so a slow download doesn't leave the last photo under this one's name. */}
+                <img
+                  key={activeImageUrl}
+                  src={activeImageUrl}
+                  alt={photo.originalFilename}
+                  className="absolute inset-0 size-full object-contain"
+                />
+              </>
             ) : (
               <div className="flex h-full items-center justify-center text-sm text-white/70">
                 {loadFailed ? (
@@ -266,29 +563,73 @@ export function PhotoLightbox({ photoId, onClose, onPhotoUpdated }: PhotoLightbo
                 )}
               </div>
             )}
+            {position > 0 && (
+              <>
+                <StageStepButton
+                  label="Previous photo"
+                  side="left"
+                  available={hasPrevious}
+                  onStep={onPrevious}
+                >
+                  <ChevronLeft aria-hidden="true" />
+                </StageStepButton>
+                <StageStepButton
+                  label="Next photo"
+                  side="right"
+                  available={hasNext}
+                  busy={waitingForNext}
+                  onStep={onNext}
+                >
+                  {waitingForNext ? (
+                    <LoaderCircle aria-hidden="true" className="animate-spin" />
+                  ) : (
+                    <ChevronRight aria-hidden="true" />
+                  )}
+                </StageStepButton>
+              </>
+            )}
           </div>
 
-          {detail && (
+          {nextFailed && (
+            <p role="alert" className="shrink-0 px-3 pt-2 text-xs text-white/85">
+              More photos could not be loaded. Next tries again.
+            </p>
+          )}
+
+          {photo && (
             <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 px-3 py-2">
-              <span className="text-xs text-white/70 tabular-nums">
-                {activeWidth} × {activeHeight} px · {formatBytes(activeByteSize)}
+              <span className="flex flex-wrap gap-x-3 text-xs text-white/70 tabular-nums">
+                {position > 0 && (
+                  <span>
+                    <span aria-hidden="true">
+                      {formatCount(position)} / {formatCount(total)}
+                    </span>
+                    <span aria-live="polite" className="sr-only">
+                      Photo {formatCount(position)} of {formatCount(total)}:{" "}
+                      {photo.originalFilename}
+                    </span>
+                  </span>
+                )}
+                <span>
+                  {activeWidth} × {activeHeight} px · {formatBytes(activeByteSize)}
+                </span>
               </span>
               <div className="flex items-center gap-2">
                 <a
                   href={activeImageUrl}
-                  download={detail.originalFilename}
+                  download={downloadFilename(photo.originalFilename, activeDevelopment)}
                   className={STAGE_ACTION}
                 >
                   <Download aria-hidden="true" />
                   Download {activeDevelopment ? activeDevelopment.format.toUpperCase() : "JPEG"}
                 </a>
-                {detail.hasRaw && detail.rawUrl && (
-                  <a href={detail.rawUrl} className={STAGE_ACTION}>
+                {photo.hasRaw && photo.rawUrl && (
+                  <a href={photo.rawUrl} className={STAGE_ACTION}>
                     <Download aria-hidden="true" />
                     RAW
-                    {detail.rawByteSize != null && (
+                    {photo.rawByteSize != null && (
                       <span className="font-normal text-white/70 tabular-nums">
-                        {formatBytes(detail.rawByteSize)}
+                        {formatBytes(photo.rawByteSize)}
                       </span>
                     )}
                   </a>
@@ -301,23 +642,27 @@ export function PhotoLightbox({ photoId, onClose, onPhotoUpdated }: PhotoLightbo
         {/* Inspector */}
         <div className="border-line bg-surface lg:w-88 lg:shrink-0 lg:overflow-y-auto lg:overscroll-contain lg:border-l">
           <div className="sticky top-0 z-10 flex items-start gap-2 bg-surface px-4 py-3">
-            {detail && (
+            {photo && (
               <h2 className="min-w-0 py-1 text-sm font-semibold break-all text-ink">
-                {detail.originalFilename}
+                {photo.originalFilename}
               </h2>
             )}
             <div className="ml-auto flex shrink-0 items-center gap-0.5">
-              {detail && (
-                <IconButton
-                  aria-label="Favorite"
-                  aria-pressed={detail.isFavorite}
+              {photo && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-label="Favorite photo"
+                  title="Favorite this photo"
+                  aria-pressed={photo.isFavorite}
                   onClick={handleToggleFavorite}
                 >
                   <Star
                     aria-hidden="true"
-                    className={detail.isFavorite ? "fill-star text-star" : ""}
+                    className={photo.isFavorite ? "fill-star text-star" : ""}
                   />
-                </IconButton>
+                  Photo
+                </Button>
               )}
               <IconButton aria-label="Close" onClick={onClose}>
                 <X aria-hidden="true" />
@@ -325,75 +670,69 @@ export function PhotoLightbox({ photoId, onClose, onPhotoUpdated }: PhotoLightbo
             </div>
           </div>
 
+          {photo && (
+            <dl className="border-t border-line px-4 text-xs">
+              <Field label="Captured">
+                {formatCaptureTime(photo.takenAt, photo.timezoneOffset)} ({photo.timezoneOffset})
+              </Field>
+              <Field label="Camera">
+                {photo.cameraMake ?? "SONY"} {photo.cameraModel ?? "ILCE-7C"}
+              </Field>
+              <Field label="Lens">{photo.lensModel ?? EM_DASH}</Field>
+              <Field label="Focal length">{withUnit(photo.focalLengthMm, " mm")}</Field>
+              <Field label="Aperture">
+                {isRecorded(photo.fNumber) ? `f/${photo.fNumber}` : EM_DASH}
+              </Field>
+              <Field label="Shutter">{formatShutter(photo.exposureTime)}</Field>
+              <Field label="ISO">{isRecorded(photo.iso) ? photo.iso : EM_DASH}</Field>
+              <Field label="35mm equivalent">{withUnit(exif?.focalLength35mm, " mm")}</Field>
+              <Field label="Exposure compensation">
+                {formatExposureCompensation(exif?.exposureCompensation)}
+              </Field>
+              <Field label="White balance">{exif?.whiteBalance || EM_DASH}</Field>
+              <Field label="Metering">{exif?.meteringMode || EM_DASH}</Field>
+            </dl>
+          )}
+
+          {photo && !detail && (
+            <p
+              role={loadFailed ? "alert" : "status"}
+              className={`border-t border-line px-4 py-3 text-xs ${
+                loadFailed ? "text-danger" : "text-ink-faint"
+              }`}
+            >
+              {loadFailed
+                ? "This photo's versions and posts could not be loaded."
+                : "Loading versions and posts…"}
+            </p>
+          )}
+
           {detail && (
             <>
-              <dl className="border-t border-line px-4 text-xs">
-                <Field label="Captured">
-                  {formatCaptureTime(detail.takenAt, detail.timezoneOffset)} (
-                  {detail.timezoneOffset})
-                </Field>
-                <Field label="Camera">
-                  {detail.cameraMake ?? "SONY"} {detail.cameraModel ?? "ILCE-7C"}
-                </Field>
-                <Field label="Lens">{detail.lensModel ?? EM_DASH}</Field>
-                <Field label="Focal length">{withUnit(detail.focalLengthMm, " mm")}</Field>
-                <Field label="Aperture">
-                  {isRecorded(detail.fNumber) ? `f/${detail.fNumber}` : EM_DASH}
-                </Field>
-                <Field label="Shutter">{formatShutter(detail.exposureTime)}</Field>
-                <Field label="ISO">{isRecorded(detail.iso) ? detail.iso : EM_DASH}</Field>
-                <Field label="35mm equivalent">{withUnit(exif?.focalLength35mm, " mm")}</Field>
-                <Field label="Exposure compensation">
-                  {formatExposureCompensation(exif?.exposureCompensation)}
-                </Field>
-                <Field label="White balance">{exif?.whiteBalance || EM_DASH}</Field>
-                <Field label="Metering">{exif?.meteringMode || EM_DASH}</Field>
-              </dl>
-
-              <section className="border-t border-line px-4 py-3">
-                <div className="flex items-baseline justify-between gap-2">
-                  <SectionHeading count={detail.developments.length}>
-                    Developed versions
-                  </SectionHeading>
-                  {detail.hasRaw && <span className="text-xs text-ink-faint">RAW stored</span>}
-                </div>
-
-                {detail.developments.length === 0 ? (
-                  <p className="mt-1 text-xs text-ink-faint">
-                    No developed versions yet. Upload them with{" "}
-                    <code className="font-mono whitespace-nowrap text-ink-muted">
-                      omoide sync-developed
-                    </code>
-                    .
-                  </p>
-                ) : (
-                  <ul className="mt-1">
-                    {detail.developments.map((dev) => {
-                      const selected = selectedVariantId === dev.id;
-                      return (
-                        <li key={dev.id}>
-                          <button
-                            type="button"
-                            aria-pressed={selected}
-                            onClick={() => setSelectedVariantId(dev.id)}
-                            className="-mx-2 flex w-[calc(100%+1rem)] items-center justify-between gap-2 rounded-sm px-2 py-1 text-left text-xs transition-colors hover:bg-subtle"
-                          >
-                            <span className="min-w-0">
-                              <span className="block truncate font-medium text-ink">
-                                {dev.format.toUpperCase()} · {dev.label}
-                              </span>
-                              <span className="block text-ink-muted tabular-nums">
-                                {dev.width} × {dev.height} · {formatBytes(dev.byteSize)}
-                              </span>
-                            </span>
-                            {selected && <span className="shrink-0 text-ink-faint">Viewing</span>}
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-              </section>
+              <DevelopedVersions
+                developments={detail.developments}
+                labels={labels}
+                hasRaw={detail.hasRaw}
+                selectedVariantId={selectedVariantId}
+                postCounts={countPostsByDevelopment(detail.posts)}
+                uploads={photoUploads}
+                favoriteFailedId={favoriteFailedId}
+                deletingIds={deletingIds}
+                deleteFailedId={deleteFailedId}
+                onSelect={setSelectedVariantId}
+                onToggleFavorite={handleToggleVersionFavorite}
+                onDelete={handleDeleteVersion}
+                onAddFiles={(files) =>
+                  uploads.queue.add(
+                    detail.id,
+                    files,
+                    detail.developments.map((d) => d.sha256),
+                  )
+                }
+                onRetryUpload={uploads.queue.retry}
+                onDismissUpload={uploads.queue.dismiss}
+                onClearFinishedUploads={() => uploads.queue.dismissFinished(detail.id)}
+              />
 
               <section className="border-t border-line px-4 py-3">
                 <SectionHeading count={detail.posts.length}>Posts</SectionHeading>
@@ -403,7 +742,7 @@ export function PhotoLightbox({ photoId, onClose, onPhotoUpdated }: PhotoLightbo
                 ) : (
                   <ul className="mt-1">
                     {detail.posts.map((post) => (
-                      <li key={post.id} className="flex items-center gap-2 py-1 text-xs">
+                      <li key={post.id} className="flex items-start gap-2 py-1 text-xs">
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-1.5">
                             <Badge className="shrink-0">{PLATFORM_LABELS[post.platform]}</Badge>
@@ -418,13 +757,20 @@ export function PhotoLightbox({ photoId, onClose, onPhotoUpdated }: PhotoLightbo
                               <ExternalLink aria-hidden="true" className="size-3 shrink-0" />
                             </a>
                           </div>
+                          <PostOwner
+                            developmentId={post.developmentId}
+                            deletedVersionLabel={post.deletedVersionLabel}
+                            labels={labels}
+                            onSelect={setSelectedVariantId}
+                          />
                           {post.caption && (
-                            <p className="mt-0.5 truncate text-ink-muted">{post.caption}</p>
+                            <p className="mt-0.5 truncate text-ink-faint">{post.caption}</p>
                           )}
                         </div>
                         <IconButton
                           variant="danger-ghost"
                           size="sm"
+                          className="-mt-1 -mr-2"
                           aria-label={`Remove ${PLATFORM_LABELS[post.platform]} post`}
                           onClick={() => handleDeletePost(post.id)}
                         >
@@ -436,6 +782,25 @@ export function PhotoLightbox({ photoId, onClose, onPhotoUpdated }: PhotoLightbo
                 )}
 
                 <form onSubmit={handleAddPost} className="mt-3 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <label htmlFor={postTargetId} className="shrink-0 text-xs text-ink-muted">
+                      Post of
+                    </label>
+                    <Select
+                      size="sm"
+                      id={postTargetId}
+                      className="min-w-0 flex-1"
+                      value={postOf}
+                      onChange={(e) => setPostTarget(e.target.value)}
+                    >
+                      <option value={ORIGINAL_VARIANT}>Original</option>
+                      {detail.developments.map((dev) => (
+                        <option key={dev.id} value={dev.id}>
+                          {labels.get(dev.id)}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
                   <div className="flex gap-2">
                     <Select
                       size="sm"
@@ -474,6 +839,11 @@ export function PhotoLightbox({ photoId, onClose, onPhotoUpdated }: PhotoLightbo
                       Add
                     </Button>
                   </div>
+                  {postError && (
+                    <p role="alert" className="text-xs text-danger">
+                      {postError}
+                    </p>
+                  )}
                 </form>
               </section>
 
@@ -486,6 +856,82 @@ export function PhotoLightbox({ photoId, onClose, onPhotoUpdated }: PhotoLightbo
         </div>
       </div>
     </div>
+  );
+}
+
+/** What a post belongs to. A reference that isn't in the list has no version to switch to. */
+function PostOwner({
+  developmentId,
+  deletedVersionLabel,
+  labels,
+  onSelect,
+}: {
+  developmentId: string | null;
+  deletedVersionLabel: string | null;
+  labels: ReadonlyMap<string, string>;
+  onSelect: (variantId: string) => void;
+}) {
+  if (!developmentId && deletedVersionLabel) {
+    return (
+      <p title={deletedVersionLabel} className="mt-0.5 truncate text-ink-faint">
+        Post of deleted version {deletedVersionLabel}
+      </p>
+    );
+  }
+  const label = developmentId ? labels.get(developmentId) : "Original";
+  if (!label) {
+    return <p className="mt-0.5 text-ink-faint">Post of Unknown version</p>;
+  }
+  return (
+    <button
+      type="button"
+      title={`Show ${label}`}
+      onClick={() => onSelect(developmentId ?? ORIGINAL_VARIANT)}
+      className="group mt-0.5 flex max-w-full gap-1 rounded-sm text-left"
+    >
+      <span className="shrink-0 text-ink-faint">Post of </span>
+      <span className="min-w-0 truncate text-ink-muted underline decoration-line-strong underline-offset-2 group-hover:text-ink group-hover:decoration-current">
+        {label}
+      </span>
+    </button>
+  );
+}
+
+/**
+ * Stays focusable at the end of the list, so a keyboard user who walks into it keeps their place.
+ * Faint rather than busy at the end, and it sits over the photo's edge rather than taking width.
+ */
+function StageStepButton({
+  label,
+  side,
+  available,
+  busy = false,
+  onStep,
+  children,
+}: {
+  label: string;
+  side: "left" | "right";
+  available: boolean;
+  busy?: boolean;
+  onStep: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={available ? label : undefined}
+      aria-disabled={!available}
+      aria-busy={busy}
+      onClick={() => {
+        if (available) onStep();
+      }}
+      className={`absolute top-1/2 inline-flex size-9 -translate-y-1/2 items-center justify-center rounded-md bg-black/45 text-white/90 transition-colors hover:bg-black/70 hover:text-white aria-disabled:bg-black/20 aria-disabled:text-white/25 aria-disabled:hover:bg-black/20 aria-disabled:hover:text-white/25 [&_svg]:size-5 ${STAGE_FOCUS} ${
+        side === "left" ? "left-2" : "right-2"
+      }`}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -503,7 +949,7 @@ function VariantButton({
       type="button"
       aria-pressed={selected}
       onClick={onSelect}
-      className={`h-6 shrink-0 rounded-sm px-2 text-xs font-medium whitespace-nowrap transition-colors focus-visible:outline-offset-0 ${STAGE_FOCUS} ${
+      className={`inline-flex h-6 shrink-0 items-center gap-1 rounded-sm px-2 text-xs font-medium whitespace-nowrap transition-colors focus-visible:outline-offset-0 ${STAGE_FOCUS} ${
         selected ? "bg-white/20 text-white" : "text-white/70 hover:text-white"
       }`}
     >

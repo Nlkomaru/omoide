@@ -15,6 +15,20 @@
       "when": 1793808256398,
       "tag": "0001_parallel_sleeper",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1793815030156,
+      "tag": "0002_luxuriant_sinister_six",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1793818953502,
+      "tag": "0003_dizzy_blue_shield",
+      "breakpoints": true
     }
   ]
 }

@@ -1,7 +1,9 @@
 import {
   CheckPhotosRequestSchema,
   CreatePhotoPostRequestSchema,
+  detectImageFormat,
   ListPhotosQuerySchema,
+  UpdateDevelopmentRequestSchema,
   UpdatePhotoRequestSchema,
   UploadDevelopmentMetadataSchema,
   UploadPhotoMetadataSchema,
@@ -16,13 +18,21 @@ import {
   addPostToPhotoRecord,
   attachRawToPhotoRecord,
   checkExistingPhotos,
+  deleteDevelopmentRecord,
   deletePhotoPostRecord,
   getPhotoDetailById,
   listPhotosForUser,
+  sha256Hex,
+  updateDevelopmentRecord,
   updatePhotoRecord,
   upsertPhotoRecord,
 } from "~/server/photos";
-import { createR2PresignedUrl, getR2ObjectResponse, putR2Object } from "~/server/r2";
+import {
+  createR2PresignedUrl,
+  deleteR2Object,
+  getR2ObjectResponse,
+  putR2Object,
+} from "~/server/r2";
 import type { ApiEnv } from "./middleware";
 
 export const photosRouter = new Hono<ApiEnv>();
@@ -310,12 +320,42 @@ photosRouter.put("/:id/asset/raw", async (c) => {
 /**
  * POST /api/v1/photos/:id/developments
  * Upload a 1:N developed variant (webp, png, jpeg, avif) for a photo.
+ * multipart/form-data (`metadata` JSON + `file` binary) stores the verified file, then the row.
+ * application/json registers metadata alone, with no file.
  */
 photosRouter.post(
   "/:id/developments",
   describeRoute({
     tags: ["Photos"],
     summary: "Upload a 1:N developed image variant (webp, png, jpeg, avif)",
+    description:
+      "Send multipart/form-data with a `metadata` JSON field and a `file` to store the file, then its row. Send application/json with the metadata alone to register a row with no file; that leaves an existing row with the same sha256 unchanged. Re-uploading an existing sha256 keeps its ID, favorite and posts.",
+    requestBody: {
+      required: true,
+      content: {
+        "multipart/form-data": {
+          schema: {
+            type: "object",
+            required: ["metadata", "file"],
+            properties: {
+              metadata: { type: "string", description: "UploadDevelopmentMetadata as JSON" },
+              file: { type: "string", format: "binary" },
+            },
+          },
+        },
+        "application/json": {
+          schema: { type: "object", description: "UploadDevelopmentMetadata" },
+        },
+      },
+    },
+    responses: {
+      201: { description: "The stored version, as `{ development }`" },
+      400: {
+        description:
+          "Invalid metadata, a missing file, a file that doesn't match its metadata, or a format that differs from the stored one",
+      },
+      404: { description: "Photo not found" },
+    },
   }),
   async (c) => {
     const photoId = c.req.param("id");
@@ -338,9 +378,10 @@ photosRouter.post(
         return c.json({ error: "Invalid JSON in metadata field" }, 400);
       }
       const file = formData.get("file");
-      if (file instanceof File) {
-        fileBytes = await file.arrayBuffer();
+      if (!(file instanceof File)) {
+        return c.json({ error: "Missing file field" }, 400);
       }
+      fileBytes = await file.arrayBuffer();
     } else {
       const body = await c.req.json().catch(() => null);
       metadataRaw = body?.metadata ?? body;
@@ -357,27 +398,141 @@ photosRouter.post(
       );
     }
 
-    const result = await addDevelopmentToPhotoRecord(db, actor.userId, photoId, parsed.data);
-    if (!result) {
-      return c.json({ error: "Photo not found" }, 404);
+    if (fileBytes) {
+      if (fileBytes.byteLength !== parsed.data.byteSize) {
+        return c.json({ error: "File size does not match what was sent" }, 400);
+      }
+      if ((await sha256Hex(fileBytes)) !== parsed.data.sha256) {
+        return c.json({ error: "File contents do not match what was sent" }, 400);
+      }
+      if (detectImageFormat(new Uint8Array(fileBytes)) !== parsed.data.format) {
+        return c.json(
+          { error: `This file is not a ${parsed.data.format.toUpperCase()} image` },
+          400,
+        );
+      }
     }
 
-    if (fileBytes && c.env.PHOTOS_BUCKET) {
-      const mimeMap: Record<string, string> = {
-        webp: "image/webp",
-        png: "image/png",
-        jpeg: "image/jpeg",
-        avif: "image/avif",
-      };
-      await putR2Object(
-        c.env.PHOTOS_BUCKET,
-        result.r2Key,
-        fileBytes,
-        mimeMap[parsed.data.format] ?? "application/octet-stream",
+    const mimeMap: Record<string, string> = {
+      webp: "image/webp",
+      png: "image/png",
+      jpeg: "image/jpeg",
+      avif: "image/avif",
+    };
+    const verifiedBytes = fileBytes;
+    const storeFile = verifiedBytes
+      ? (r2Key: string) =>
+          putR2Object(
+            c.env.PHOTOS_BUCKET,
+            r2Key,
+            verifiedBytes,
+            mimeMap[parsed.data.format] ?? "application/octet-stream",
+          )
+      : undefined;
+
+    const result = await addDevelopmentToPhotoRecord(
+      db,
+      actor.userId,
+      photoId,
+      parsed.data,
+      storeFile,
+    );
+    if (result.status === "photo_not_found") {
+      return c.json({ error: "Photo not found" }, 404);
+    }
+    if (result.status === "format_mismatch") {
+      return c.json(
+        { error: `This file is already stored as ${result.format.toUpperCase()}` },
+        400,
       );
     }
 
     return c.json({ development: result.item }, 201);
+  },
+);
+
+/**
+ * PATCH /api/v1/photos/:id/developments/:devId
+ * Toggle a developed variant's favorite status, independently of the photo's.
+ */
+photosRouter.patch(
+  "/:id/developments/:devId",
+  describeRoute({
+    tags: ["Photos"],
+    summary: "Update a developed variant's favorite status",
+    requestBody: {
+      required: true,
+      content: {
+        "application/json": {
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: { isFavorite: { type: "boolean" } },
+          },
+        },
+      },
+    },
+    responses: {
+      200: { description: "The updated version, as `{ development }`" },
+      400: { description: "Invalid update payload" },
+      404: { description: "Developed variant not found for this photo and user" },
+    },
+  }),
+  async (c) => {
+    const photoId = c.req.param("id");
+    const devId = c.req.param("devId");
+    const body = await c.req.json().catch(() => null);
+    const parsed = UpdateDevelopmentRequestSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: "Invalid update payload", details: parsed.error.flatten() }, 400);
+    }
+
+    const db = c.get("db");
+    const actor = c.get("actor");
+    const development = await updateDevelopmentRecord(
+      db,
+      actor.userId,
+      photoId,
+      devId,
+      parsed.data,
+    );
+    if (!development) {
+      return c.json({ error: "Developed variant not found" }, 404);
+    }
+
+    return c.json({ development });
+  },
+);
+
+/**
+ * DELETE /api/v1/photos/:id/developments/:devId
+ * Delete a developed variant and its file. Posts of it stay, marked as posts of a deleted version.
+ */
+photosRouter.delete(
+  "/:id/developments/:devId",
+  describeRoute({
+    tags: ["Photos"],
+    summary: "Delete a developed variant and its file",
+    responses: {
+      200: { description: "`{ ok, deletedVersionLabel, updatedAt }`" },
+      404: { description: "Developed variant not found for this photo and user" },
+    },
+  }),
+  async (c) => {
+    const db = c.get("db");
+    const actor = c.get("actor");
+    const deleted = await deleteDevelopmentRecord(
+      db,
+      actor.userId,
+      c.req.param("id"),
+      c.req.param("devId"),
+      (r2Key) => deleteR2Object(c.env.PHOTOS_BUCKET, r2Key),
+    );
+    if (!deleted) {
+      return c.json({ error: "Developed variant not found" }, 404);
+    }
+
+    return c.json({ ok: true, ...deleted });
   },
 );
 
@@ -401,12 +556,15 @@ photosRouter.post(
 
     const db = c.get("db");
     const actor = c.get("actor");
-    const post = await addPostToPhotoRecord(db, actor.userId, photoId, parsed.data);
-    if (!post) {
+    const result = await addPostToPhotoRecord(db, actor.userId, photoId, parsed.data);
+    if (result.status === "photo_not_found") {
       return c.json({ error: "Photo not found" }, 404);
     }
+    if (result.status === "development_not_found") {
+      return c.json({ error: "This version does not belong to this photo" }, 400);
+    }
 
-    return c.json({ post }, 201);
+    return c.json({ post: result.post }, 201);
   },
 );
 

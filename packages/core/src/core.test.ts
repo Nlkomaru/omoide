@@ -3,6 +3,7 @@ import {
   BLURHASH_COMPONENTS_X,
   BLURHASH_COMPONENTS_Y,
   decodeBlurhashToRgba,
+  detectImageFormat,
   encodeBlurhash,
   extractTimestampFromUuidv7,
   formatShutterSpeed,
@@ -114,5 +115,45 @@ describe("@omoide/core BlurHash & R2 key helpers", () => {
     expect(r2Keys.development("u1", "p1", "d1", "webp")).toBe(
       "users/u1/photos/p1/developments/d1.webp",
     );
+  });
+});
+
+describe("@omoide/core image format detection", () => {
+  const bytes = (...parts: (string | number[])[]) =>
+    new Uint8Array(
+      parts.flatMap((part) =>
+        typeof part === "string" ? Array.from(part, (c) => c.charCodeAt(0)) : part,
+      ),
+    );
+
+  it("recognizes each developed format from its first bytes", () => {
+    expect(detectImageFormat(bytes([0xff, 0xd8, 0xff, 0xe0]))).toBe("jpeg");
+    expect(detectImageFormat(bytes([0x89], "PNG", [0x0d, 0x0a, 0x1a, 0x0a]))).toBe("png");
+    expect(detectImageFormat(bytes("RIFF", [1, 2, 3, 4], "WEBPVP8 "))).toBe("webp");
+    expect(detectImageFormat(bytes([0, 0, 0, 16], "ftypavif", [0, 0, 0, 0]))).toBe("avif");
+    expect(detectImageFormat(bytes([0, 0, 0, 20], "ftypavis", [0, 0, 0, 0], "msf1"))).toBe("avif");
+  });
+
+  it("finds AVIF among the compatible brands, within the ftyp box", () => {
+    expect(detectImageFormat(bytes([0, 0, 0, 24], "ftypmif1", [0, 0, 0, 0], "miafavif"))).toBe(
+      "avif",
+    );
+    expect(
+      detectImageFormat(bytes([0, 0, 0, 20], "ftypmif1", [0, 0, 0, 0], "miafavif")),
+    ).toBeNull();
+  });
+
+  it("doesn't read the minor version as a brand", () => {
+    expect(detectImageFormat(bytes([0, 0, 0, 16], "ftypmif1avif"))).toBeNull();
+  });
+
+  it("refuses everything else", () => {
+    expect(
+      detectImageFormat(bytes([0, 0, 0, 24], "ftypheic", [0, 0, 0, 0], "mif1heic")),
+    ).toBeNull();
+    expect(detectImageFormat(bytes("<svg xmlns='http://www.w3.org/2000/svg'/>"))).toBeNull();
+    expect(detectImageFormat(bytes("GIF89a"))).toBeNull();
+    expect(detectImageFormat(bytes("RIFF", [1, 2, 3, 4], "WAVEfmt "))).toBeNull();
+    expect(detectImageFormat(new Uint8Array())).toBeNull();
   });
 });

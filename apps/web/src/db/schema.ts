@@ -205,6 +205,8 @@ export const photoDevelopments = sqliteTable(
     width: integer("width").notNull(),
     height: integer("height").notNull(),
     blurhash: text("blurhash"),
+    // Independent of photos.isFavorite, which also drives RAW sync.
+    isFavorite: integer("is_favorite", { mode: "boolean" }).notNull().default(false),
     developedAt: integer("developed_at").notNull(),
     createdAt: integer("created_at").notNull(),
   },
@@ -231,6 +233,7 @@ export const photoPosts = sqliteTable(
     developmentId: text("development_id").references(() => photoDevelopments.id, {
       onDelete: "set null",
     }),
+    deletedVersionLabel: text("deleted_version_label"),
     platform: text("platform").$type<SocialPlatform>().notNull(),
     postUrl: text("post_url").notNull(),
     externalPostId: text("external_post_id"),

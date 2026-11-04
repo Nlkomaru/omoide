@@ -3,12 +3,14 @@ import {
   type ApiPhotoSummary,
   type CheckedPhotoStatus,
   type CreatePhotoPostRequest,
+  type DevelopedFormat,
   type ListPhotosQuery,
   type ListPhotosResponse,
   type PhotoDevelopmentItem,
   type PhotoPostItem,
   r2Keys,
   type SocialPlatform,
+  type UpdateDevelopmentRequest,
   type UpdatePhotoRequest,
   type UploadDevelopmentMetadata,
   type UploadPhotoMetadata,
@@ -19,6 +21,7 @@ import {
 import { and, desc, eq, inArray } from "drizzle-orm";
 import type { AppDatabase } from "~/db/client";
 import { photoDevelopments, photoPosts, photos } from "~/db/schema";
+import { versionLabel } from "~/lib/photoVersions";
 
 function buildJpegAssetUrl(photoId: string): string {
   return `/api/v1/photos/${photoId}/asset/jpeg`;
@@ -34,6 +37,43 @@ function buildRawAssetUrl(photoId: string, hasRaw: boolean): string | null {
 
 function buildDevelopmentAssetUrl(photoId: string, developmentId: string): string {
   return `/api/v1/photos/${photoId}/developments/${developmentId}/asset`;
+}
+
+function toDevelopmentItem(row: typeof photoDevelopments.$inferSelect): PhotoDevelopmentItem {
+  return {
+    id: row.id,
+    photoId: row.photoId,
+    format: row.format,
+    label: row.label,
+    url: buildDevelopmentAssetUrl(row.photoId, row.id),
+    sha256: row.sha256,
+    byteSize: row.byteSize,
+    width: row.width,
+    height: row.height,
+    blurhash: row.blurhash,
+    isFavorite: row.isFavorite,
+    developedAt: row.developedAt,
+    createdAt: row.createdAt,
+  };
+}
+
+/** Lowercase hex SHA-256, the form `Sha256HexSchema` accepts. */
+export async function sha256Hex(data: BufferSource): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Seeds the ID with the photo as well as the file: the same file can be a version
+ * of several photos, and a hash of the file alone would collide on the primary key.
+ */
+async function deriveDevelopmentId(
+  photoId: string,
+  developedAt: number,
+  fileSha256: string,
+): Promise<string> {
+  const seed = await sha256Hex(new TextEncoder().encode(`${photoId}:${fileSha256}`));
+  return uuidv7FromExifTimestamp(developedAt, seed);
 }
 
 /**
@@ -232,61 +272,77 @@ export async function attachRawToPhotoRecord(
   return { rawKey, detail };
 }
 
+export type AddDevelopmentResult =
+  | { status: "stored"; item: PhotoDevelopmentItem }
+  | { status: "photo_not_found" }
+  | { status: "format_mismatch"; format: DevelopedFormat };
+
+/**
+ * Adds a developed variant, or refreshes the existing one with the same file hash.
+ * `storeFile` runs before any row is written, so a failed write leaves the database untouched.
+ * The refresh keeps the row's ID, which is what posts refer to, and its favorite flag. It needs the
+ * file, and the file's format: both decide where the row's R2 object is. Metadata alone leaves an
+ * existing row as it is.
+ */
 export async function addDevelopmentToPhotoRecord(
   db: AppDatabase,
   userId: string,
   photoId: string,
   metadata: UploadDevelopmentMetadata,
-): Promise<{ r2Key: string; item: PhotoDevelopmentItem } | null> {
+  storeFile?: (r2Key: string) => Promise<void>,
+): Promise<AddDevelopmentResult> {
   const existingPhoto = await db
     .select({ id: photos.id })
     .from(photos)
     .where(and(eq(photos.id, photoId), eq(photos.userId, userId)))
     .limit(1);
 
-  if (!existingPhoto[0]) return null;
+  if (!existingPhoto[0]) return { status: "photo_not_found" };
 
-  const existingDev = await db
+  const existingRows = await db
     .select()
     .from(photoDevelopments)
     .where(
       and(eq(photoDevelopments.photoId, photoId), eq(photoDevelopments.sha256, metadata.sha256)),
     )
     .limit(1);
+  const existingDev = existingRows[0];
+
+  if (existingDev && !storeFile) {
+    return { status: "stored", item: toDevelopmentItem(existingDev) };
+  }
+  if (existingDev && existingDev.format !== metadata.format) {
+    return { status: "format_mismatch", format: existingDev.format };
+  }
 
   const now = Date.now();
   const developedAt = metadata.developedAt ?? now;
-  const devId = existingDev[0]?.id ?? uuidv7FromExifTimestamp(developedAt, metadata.sha256);
+  const devId =
+    existingDev?.id ?? (await deriveDevelopmentId(photoId, developedAt, metadata.sha256));
   const r2Key = r2Keys.development(userId, photoId, devId, metadata.format);
 
-  if (existingDev[0]) {
-    await db
-      .update(photoDevelopments)
-      .set({
-        format: metadata.format,
-        label: metadata.label,
-        r2Key,
-        byteSize: metadata.byteSize,
-        width: metadata.width,
-        height: metadata.height,
-        blurhash: metadata.blurhash ?? existingDev[0].blurhash,
-        developedAt,
-      })
-      .where(eq(photoDevelopments.id, devId));
+  await storeFile?.(r2Key);
+
+  const values = {
+    format: metadata.format,
+    label: metadata.label,
+    r2Key,
+    byteSize: metadata.byteSize,
+    width: metadata.width,
+    height: metadata.height,
+    blurhash: metadata.blurhash ?? existingDev?.blurhash ?? null,
+    developedAt,
+  };
+
+  if (existingDev) {
+    await db.update(photoDevelopments).set(values).where(eq(photoDevelopments.id, devId));
   } else {
     await db.insert(photoDevelopments).values({
+      ...values,
       id: devId,
       userId,
       photoId,
-      format: metadata.format,
-      label: metadata.label,
-      r2Key,
       sha256: metadata.sha256,
-      byteSize: metadata.byteSize,
-      width: metadata.width,
-      height: metadata.height,
-      blurhash: metadata.blurhash,
-      developedAt,
       createdAt: now,
     });
   }
@@ -294,37 +350,139 @@ export async function addDevelopmentToPhotoRecord(
   await db.update(photos).set({ updatedAt: now }).where(eq(photos.id, photoId));
 
   return {
-    r2Key,
-    item: {
+    status: "stored",
+    item: toDevelopmentItem({
+      ...values,
       id: devId,
+      userId,
       photoId,
-      format: metadata.format,
-      label: metadata.label,
-      url: buildDevelopmentAssetUrl(photoId, devId),
       sha256: metadata.sha256,
-      byteSize: metadata.byteSize,
-      width: metadata.width,
-      height: metadata.height,
-      blurhash: metadata.blurhash,
-      developedAt,
-      createdAt: existingDev[0]?.createdAt ?? now,
-    },
+      isFavorite: existingDev?.isFavorite ?? false,
+      createdAt: existingDev?.createdAt ?? now,
+    }),
   };
 }
+
+/** Sets a version's favorite flag. It never touches `photos.isFavorite`. */
+export async function updateDevelopmentRecord(
+  db: AppDatabase,
+  userId: string,
+  photoId: string,
+  developmentId: string,
+  input: UpdateDevelopmentRequest,
+): Promise<PhotoDevelopmentItem | null> {
+  const rows = await db
+    .select()
+    .from(photoDevelopments)
+    .where(
+      and(
+        eq(photoDevelopments.id, developmentId),
+        eq(photoDevelopments.photoId, photoId),
+        eq(photoDevelopments.userId, userId),
+      ),
+    )
+    .limit(1);
+
+  const row = rows[0];
+  if (!row) return null;
+  if (input.isFavorite === undefined) return toDevelopmentItem(row);
+
+  await db
+    .update(photoDevelopments)
+    .set({ isFavorite: input.isFavorite })
+    .where(eq(photoDevelopments.id, developmentId));
+  await db.update(photos).set({ updatedAt: Date.now() }).where(eq(photos.id, photoId));
+
+  return toDevelopmentItem({ ...row, isFavorite: input.isFavorite });
+}
+
+export interface DeletedDevelopment {
+  deletedVersionLabel: string;
+  updatedAt: number;
+}
+
+/**
+ * Deletes a version: its file, then its row. Each step can be repeated, so when one fails the row
+ * survives and deleting again finishes the job, rather than leaving a file nothing points to.
+ *
+ * Posts stay, since they exist on the platform whether or not the version does. The foreign key
+ * clears their `developmentId`, and a null there means "of the original", so they keep the deleted
+ * version's name to say otherwise.
+ */
+export async function deleteDevelopmentRecord(
+  db: AppDatabase,
+  userId: string,
+  photoId: string,
+  developmentId: string,
+  removeFile: (r2Key: string) => Promise<void>,
+): Promise<DeletedDevelopment | null> {
+  const rows = await db
+    .select()
+    .from(photoDevelopments)
+    .where(
+      and(
+        eq(photoDevelopments.id, developmentId),
+        eq(photoDevelopments.photoId, photoId),
+        eq(photoDevelopments.userId, userId),
+      ),
+    )
+    .limit(1);
+
+  const row = rows[0];
+  if (!row) return null;
+
+  await removeFile(row.r2Key);
+
+  const deletedVersionLabel = versionLabel(row);
+  const updatedAt = Date.now();
+  // One transaction, so a post added meanwhile can't lose its version without getting the name.
+  await db.batch([
+    db
+      .update(photoPosts)
+      .set({ deletedVersionLabel })
+      .where(eq(photoPosts.developmentId, developmentId)),
+    db.delete(photoDevelopments).where(eq(photoDevelopments.id, developmentId)),
+    db.update(photos).set({ updatedAt }).where(eq(photos.id, photoId)),
+  ]);
+
+  return { deletedVersionLabel, updatedAt };
+}
+
+export type AddPostResult =
+  | { status: "created"; post: PhotoPostItem }
+  | { status: "photo_not_found" }
+  | { status: "development_not_found" };
 
 export async function addPostToPhotoRecord(
   db: AppDatabase,
   userId: string,
   photoId: string,
   input: CreatePhotoPostRequest,
-): Promise<PhotoPostItem | null> {
+): Promise<AddPostResult> {
   const existingPhoto = await db
     .select({ id: photos.id })
     .from(photos)
     .where(and(eq(photos.id, photoId), eq(photos.userId, userId)))
     .limit(1);
 
-  if (!existingPhoto[0]) return null;
+  if (!existingPhoto[0]) return { status: "photo_not_found" };
+
+  const developmentId = input.developmentId ?? null;
+  if (developmentId !== null) {
+    const development = await db
+      .select({ id: photoDevelopments.id })
+      .from(photoDevelopments)
+      .where(
+        and(
+          eq(photoDevelopments.id, developmentId),
+          eq(photoDevelopments.photoId, photoId),
+          eq(photoDevelopments.userId, userId),
+        ),
+      )
+      .limit(1);
+
+    if (!development[0]) return { status: "development_not_found" };
+  }
 
   const now = Date.now();
   const postedAt = input.postedAt ?? now;
@@ -334,7 +492,7 @@ export async function addPostToPhotoRecord(
     id: postId,
     userId,
     photoId,
-    developmentId: input.developmentId ?? null,
+    developmentId,
     platform: input.platform,
     postUrl: input.postUrl,
     externalPostId: input.externalPostId ?? null,
@@ -346,15 +504,19 @@ export async function addPostToPhotoRecord(
   await db.update(photos).set({ updatedAt: now }).where(eq(photos.id, photoId));
 
   return {
-    id: postId,
-    photoId,
-    developmentId: input.developmentId ?? null,
-    platform: input.platform,
-    postUrl: input.postUrl,
-    externalPostId: input.externalPostId ?? null,
-    caption: input.caption ?? null,
-    postedAt,
-    createdAt: now,
+    status: "created",
+    post: {
+      id: postId,
+      photoId,
+      developmentId,
+      deletedVersionLabel: null,
+      platform: input.platform,
+      postUrl: input.postUrl,
+      externalPostId: input.externalPostId ?? null,
+      caption: input.caption ?? null,
+      postedAt,
+      createdAt: now,
+    },
   };
 }
 
@@ -469,24 +631,12 @@ export async function getPhotoDetailById(
     platforms,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
-    developments: developments.map((d) => ({
-      id: d.id,
-      photoId: d.photoId,
-      format: d.format,
-      label: d.label,
-      url: buildDevelopmentAssetUrl(d.photoId, d.id),
-      sha256: d.sha256,
-      byteSize: d.byteSize,
-      width: d.width,
-      height: d.height,
-      blurhash: d.blurhash,
-      developedAt: d.developedAt,
-      createdAt: d.createdAt,
-    })),
+    developments: developments.map(toDevelopmentItem),
     posts: posts.map((p) => ({
       id: p.id,
       photoId: p.photoId,
       developmentId: p.developmentId,
+      deletedVersionLabel: p.deletedVersionLabel,
       platform: p.platform,
       postUrl: p.postUrl,
       externalPostId: p.externalPostId,
