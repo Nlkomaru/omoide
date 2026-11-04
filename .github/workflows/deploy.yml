@@ -1,0 +1,83 @@
+name: Deploy Web
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-web
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check & Typecheck
+        run: |
+          pnpm run check:ci
+          pnpm run typecheck
+
+      - name: Run tests
+        run: pnpm run test
+
+      - name: Build Web
+        run: pnpm run build:web
+
+      - name: Deploy to Cloudflare Workers
+        if: github.event_name == 'push' && env.CLOUDFLARE_API_TOKEN != ''
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
+          BETTER_AUTH_URL: ${{ secrets.BETTER_AUTH_URL }}
+          GITHUB_CLIENT_ID: ${{ secrets.GITHUB_CLIENT_ID }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }}
+          ALLOWED_USERS: ${{ secrets.ALLOWED_USERS }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          R2_S3_ENDPOINT: ${{ secrets.R2_S3_ENDPOINT }}
+        run: |
+          set -euo pipefail
+          pnpm --filter @omoide/web exec wrangler deploy
+          jq -n \
+            --arg better_auth_secret "$BETTER_AUTH_SECRET" \
+            --arg better_auth_url "$BETTER_AUTH_URL" \
+            --arg github_client_id "$GITHUB_CLIENT_ID" \
+            --arg github_client_secret "$GITHUB_CLIENT_SECRET" \
+            --arg allowed_users "$ALLOWED_USERS" \
+            --arg r2_access_key_id "$R2_ACCESS_KEY_ID" \
+            --arg r2_secret_access_key "$R2_SECRET_ACCESS_KEY" \
+            --arg r2_bucket_name "$R2_BUCKET_NAME" \
+            --arg r2_s3_endpoint "$R2_S3_ENDPOINT" \
+            '{
+              BETTER_AUTH_SECRET: $better_auth_secret,
+              BETTER_AUTH_URL: $better_auth_url,
+              GITHUB_CLIENT_ID: $github_client_id,
+              GITHUB_CLIENT_SECRET: $github_client_secret,
+              ALLOWED_USERS: $allowed_users,
+              R2_ACCESS_KEY_ID: $r2_access_key_id,
+              R2_SECRET_ACCESS_KEY: $r2_secret_access_key,
+              R2_BUCKET_NAME: $r2_bucket_name,
+              R2_S3_ENDPOINT: $r2_s3_endpoint
+            }' | pnpm --filter @omoide/web exec wrangler secret bulk

@@ -1,0 +1,42 @@
+@import "@fontsource/poppins/400.css";
+@import "@fontsource/poppins/500.css";
+@import "@fontsource/poppins/600.css";
+@import "@fontsource/noto-sans-jp/400.css";
+@import "@fontsource/noto-sans-jp/500.css";
+@import "@fontsource/noto-sans-jp/700.css";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+@import "@fontsource/space-mono/400.css";
+@import "@fontsource/space-mono/700.css";
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    color-scheme: light;
+    --font-sans: "Poppins", "Noto Sans JP", -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: "JetBrains Mono", monospace;
+    --font-display: "Space Mono", "Poppins", monospace;
+  }
+
+  html,
+  body {
+    background-color: #ffffff;
+    color: #18181b;
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+.font-mono-spec {
+  font-family: var(--font-mono);
+}
+
+.font-display-mono {
+  font-family: var(--font-display);
+}
+
+.vertical-brand {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+}

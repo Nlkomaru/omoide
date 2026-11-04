@@ -1,0 +1,35 @@
+{
+  "name": "omoide-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.33.3",
+  "scripts": {
+    "dev": "pnpm --filter @omoide/web dev",
+    "build": "pnpm --filter @omoide/core build && pnpm --filter @omoide/web build && pnpm --filter @omoide/cli build",
+    "build:web": "pnpm --filter @omoide/web build",
+    "build:cli": "pnpm --filter @omoide/cli build",
+    "test": "vitest run",
+    "typecheck": "pnpm -r typecheck",
+    "check": "biome check . --write",
+    "check:ci": "biome ci .",
+    "db:generate": "pnpm --filter @omoide/web db:generate",
+    "db:migrate": "pnpm --filter @omoide/web db:migrate",
+    "secrets:push": "gh secret set -f .env",
+    "env:sync": "node scripts/sync-dev-vars.mjs"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.10",
+    "@types/node": "^22.13.14",
+    "typescript": "^5.8.2",
+    "vite-plus": "^1.5.0",
+    "vitest": "^3.2.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "sharp",
+      "workerd"
+    ]
+  }
+}

@@ -1,0 +1,28 @@
+# Dependencies
+node_modules
+.pnpm-store
+
+# Build outputs
+dist
+.output
+.vinxi
+.tanstack
+.wrangler
+.cloudflare
+styled-system
+
+# Environment & Secrets (NEVER commit secrets)
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+.secrets.vars
+
+# IDE / OS
+.DS_Store
+.idea
+.vscode
+*.log
+*.tsbuildinfo
