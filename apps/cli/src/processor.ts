@@ -126,30 +126,48 @@ export async function processImageBufferWithSharp(filePath: string): Promise<{
 
 /**
  * Prepares full UploadPhotoMetadata + deterministic UUIDv7 for a base JPEG file.
+ * If `jpegQuality` (1-100) is specified, re-encodes the JPEG with sharp to compress it before uploading.
  */
 export async function prepareBasePhotoUpload(
   jpegPath: string,
   precomputedSha256?: string,
+  jpegQuality?: number,
 ): Promise<{
   photoId: string;
   metadata: UploadPhotoMetadata;
   thumbAvifBuffer: Buffer | null;
+  compressedJpegBuffer: Buffer | null;
 }> {
-  const [fileStat, jpegSha256, exif, processed] = await Promise.all([
+  const [fileStat, originalSha256, exif, processed] = await Promise.all([
     stat(jpegPath),
     precomputedSha256 ? Promise.resolve(precomputedSha256) : computeFileSha256(jpegPath),
     extractNormalizedExif(jpegPath),
     processImageBufferWithSharp(jpegPath),
   ]);
 
-  const photoId = uuidv7FromExifTimestamp(exif.takenAt, jpegSha256);
+  let compressedJpegBuffer: Buffer | null = null;
+  let finalByteSize = fileStat.size;
+
+  if (typeof jpegQuality === "number" && jpegQuality >= 1 && jpegQuality <= 100) {
+    try {
+      compressedJpegBuffer = await sharp(jpegPath)
+        .rotate()
+        .jpeg({ quality: jpegQuality, mozjpeg: true })
+        .toBuffer();
+      finalByteSize = compressedJpegBuffer.length;
+    } catch {
+      compressedJpegBuffer = null;
+    }
+  }
+
+  const photoId = uuidv7FromExifTimestamp(exif.takenAt, originalSha256);
 
   return {
     photoId,
     metadata: {
       originalFilename: path.basename(jpegPath),
-      jpegSha256,
-      jpegByteSize: fileStat.size,
+      jpegSha256: originalSha256,
+      jpegByteSize: finalByteSize,
       width: processed.width,
       height: processed.height,
       blurhash: processed.blurhash,
@@ -158,6 +176,7 @@ export async function prepareBasePhotoUpload(
       exif,
     },
     thumbAvifBuffer: processed.thumbAvifBuffer,
+    compressedJpegBuffer,
   };
 }
 

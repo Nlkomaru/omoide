@@ -3,12 +3,14 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { SocialPlatformSchema } from "@omoide/core";
 import { loadCliConfig, OmoideApiClient, saveCliConfig } from "./client";
+import { runWithConcurrency } from "./pool";
 import {
   computeFileSha256,
   prepareBasePhotoUpload,
   prepareDevelopmentUpload,
   prepareRawUpload,
 } from "./processor";
+import { CliProgressBar } from "./progress";
 import {
   buildStemFileIndex,
   DEFAULT_WINDOWS_PHOTO_DIRS,
@@ -49,10 +51,10 @@ function printHelp() {
 Omoide CLI — Sony α7C (ILCE-7C) Photo Archive & RAW/Developed Sync Tool
 
 Usage:
-  omoide auth --url <server-url> --api-key <omod_...> [--dirs <dir1,dir2>]
-  omoide sync [paths...] [--with-raw] [--dry-run]
-  omoide sync-developed <session-dir> [--photo-dirs <dir1,dir2>] [--dry-run]
-  omoide sync-favorites [paths...] [--dry-run]
+  omoide auth --url <server-url> --api-key <omod_...> [--dirs <dir1,dir2>] [--quality <80-100>] [--concurrency <4>]
+  omoide sync [paths...] [--with-raw] [--quality <1-100>] [--concurrency <4>] [--dry-run]
+  omoide sync-developed <session-dir> [--photo-dirs <dir1,dir2>] [--concurrency <4>] [--dry-run]
+  omoide sync-favorites [paths...] [--concurrency <4>] [--dry-run]
   omoide post add --photo <uuidv7> --platform <instagram|twitter|blog|portfolio> --url <post-url> [--caption <text>]
 
 Default Windows Sync Directories (overridable in config or --dirs):
@@ -67,6 +69,8 @@ async function runAuthCommand(argv: string[]) {
       url: { type: "string" },
       "api-key": { type: "string" },
       dirs: { type: "string" },
+      quality: { type: "string" },
+      concurrency: { type: "string" },
     },
   });
 
@@ -79,6 +83,10 @@ async function runAuthCommand(argv: string[]) {
         .map((d) => d.trim())
         .filter(Boolean)
     : existing.photoDirs;
+  const nextQuality = values.quality ? Number.parseInt(values.quality, 10) : existing.jpegQuality;
+  const nextConcurrency = values.concurrency
+    ? Number.parseInt(values.concurrency, 10)
+    : existing.concurrency;
 
   if (!nextKey) {
     console.error("Error: --api-key <omod_...> is required.");
@@ -89,10 +97,18 @@ async function runAuthCommand(argv: string[]) {
     url: nextUrl,
     apiKey: nextKey,
     photoDirs: nextDirs,
+    jpegQuality: Number.isNaN(nextQuality) ? undefined : nextQuality,
+    concurrency: Number.isNaN(nextConcurrency) ? undefined : nextConcurrency,
   });
   console.log(`Saved Omoide CLI credentials to ${savedPath}`);
   if (nextDirs && nextDirs.length > 0) {
     console.log(`Configured default photo directories: ${nextDirs.join(", ")}`);
+  }
+  if (typeof nextQuality === "number") {
+    console.log(`Configured default JPEG quality: ${nextQuality}`);
+  }
+  if (typeof nextConcurrency === "number") {
+    console.log(`Configured default concurrency: ${nextConcurrency}`);
   }
 }
 
@@ -108,6 +124,8 @@ async function runSyncCommand(argv: string[]) {
     options: {
       "with-raw": { type: "boolean", default: false },
       "dry-run": { type: "boolean", default: false },
+      quality: { type: "string" },
+      concurrency: { type: "string" },
     },
   });
 
@@ -120,6 +138,11 @@ async function runSyncCommand(argv: string[]) {
     process.exit(1);
   }
 
+  const concurrency = values.concurrency
+    ? Number.parseInt(values.concurrency, 10)
+    : (config.concurrency ?? 4);
+  const quality = values.quality ? Number.parseInt(values.quality, 10) : config.jpegQuality;
+
   console.log(`Scanning directories:\n  - ${targetDirs.join("\n  - ")}`);
   const pairs = await scanPhotoDirectories(targetDirs);
   console.log(`Found ${pairs.length} Sony α7C JPEG photos.`);
@@ -128,12 +151,20 @@ async function runSyncCommand(argv: string[]) {
   const client = new OmoideApiClient(config);
 
   console.log("Computing SHA-256 hashes for deduplication...");
+  const hashBar = new CliProgressBar({
+    total: pairs.length,
+    title: "Hashing",
+  });
+
   const hashByPath = new Map<string, string>();
-  for (const pair of pairs) {
+  await runWithConcurrency(pairs, 8, async (pair) => {
     const sha = await computeFileSha256(pair.jpegPath);
     hashByPath.set(pair.jpegPath, sha);
-  }
+    hashBar.increment(1, pair.stem);
+  });
+  hashBar.complete(`Hashed ${pairs.length} photos.`);
 
+  console.log("Checking existing photos on server...");
   const allHashes = Array.from(hashByPath.values());
   const existingStatuses = values["dry-run"] ? [] : await client.checkHashes(allHashes);
   const existingByHash = new Map(existingStatuses.map((item) => [item.jpegSha256, item]));
@@ -142,9 +173,17 @@ async function runSyncCommand(argv: string[]) {
   let skippedCount = 0;
   let rawUploadedCount = 0;
 
-  for (const pair of pairs) {
+  const syncBar = new CliProgressBar({
+    total: pairs.length,
+    title: values["dry-run"] ? "Dry-run" : "Syncing",
+  });
+
+  await runWithConcurrency(pairs, concurrency, async (pair) => {
     const sha = hashByPath.get(pair.jpegPath);
-    if (!sha) continue;
+    if (!sha) {
+      syncBar.increment(1, `${pair.stem} (skip)`);
+      return;
+    }
     const existing = existingByHash.get(sha);
 
     if (existing) {
@@ -152,42 +191,59 @@ async function runSyncCommand(argv: string[]) {
       // If --with-raw or photo is favorited on server and missing RAW, upload .ARW
       if (pair.rawPath && !existing.hasRaw && (values["with-raw"] || existing.isFavorite)) {
         if (values["dry-run"]) {
-          console.log(`[DRY-RUN] Would attach RAW ${pair.rawPath} -> ${existing.photoId}`);
+          syncBar.logAbove(`[DRY-RUN] Would attach RAW ${pair.rawPath} -> ${existing.photoId}`);
         } else {
-          console.log(`Uploading 1:1 RAW ${path.basename(pair.rawPath)} -> ${existing.photoId}...`);
+          syncBar.logAbove(
+            `Uploading 1:1 RAW ${path.basename(pair.rawPath)} -> ${existing.photoId}...`,
+          );
           const rawMeta = await prepareRawUpload(pair.rawPath);
           await client.uploadRawFile(existing.photoId, rawMeta, pair.rawPath);
           rawUploadedCount++;
         }
       }
-      continue;
+      syncBar.increment(1, `${pair.stem} (cached)`);
+      return;
     }
 
-    const prepared = await prepareBasePhotoUpload(pair.jpegPath, sha);
+    const prepared = await prepareBasePhotoUpload(pair.jpegPath, sha, quality);
     if (values["dry-run"]) {
-      console.log(
-        `[DRY-RUN] Would upload ${pair.stem} (${prepared.photoId}) — ${prepared.metadata.exif.lensModel ?? "ILCE-7C"}`,
+      syncBar.logAbove(
+        `[DRY-RUN] Would upload ${pair.stem} (${prepared.photoId}) — ${prepared.metadata.exif.lensModel ?? "ILCE-7C"}${
+          prepared.compressedJpegBuffer
+            ? ` [compressed ${Math.round(prepared.metadata.jpegByteSize / 1024)}KB]`
+            : ""
+        }`,
       );
-      continue;
+      syncBar.increment(1, `${pair.stem} (dry-run)`);
+      return;
     }
 
-    console.log(
-      `Uploading ${pair.stem} -> UUIDv7 ${prepared.photoId} (${prepared.metadata.exif.focalLengthMm ?? "?"}mm f/${prepared.metadata.exif.fNumber ?? "?"})...`,
+    syncBar.logAbove(
+      `Uploading ${pair.stem} -> UUIDv7 ${prepared.photoId} (${prepared.metadata.exif.focalLengthMm ?? "?"}mm f/${prepared.metadata.exif.fNumber ?? "?"})${
+        prepared.compressedJpegBuffer
+          ? ` [compressed ${Math.round(prepared.metadata.jpegByteSize / 1024)}KB]`
+          : ""
+      }...`,
     );
     const { photoId } = await client.uploadBasePhoto(
       prepared.metadata,
       pair.jpegPath,
       prepared.thumbAvifBuffer,
+      prepared.compressedJpegBuffer,
     );
     uploadedCount++;
 
     if (pair.rawPath && values["with-raw"]) {
-      console.log(`  + Attaching 1:1 RAW ${path.basename(pair.rawPath)}...`);
+      syncBar.logAbove(`  + Attaching 1:1 RAW ${path.basename(pair.rawPath)}...`);
       const rawMeta = await prepareRawUpload(pair.rawPath);
       await client.uploadRawFile(photoId, rawMeta, pair.rawPath);
       rawUploadedCount++;
     }
-  }
+
+    syncBar.increment(1, `${pair.stem} (uploaded)`);
+  });
+
+  syncBar.complete();
 
   console.log(
     `Sync complete: ${uploadedCount} JPEGs uploaded, ${rawUploadedCount} RAWs attached, ${skippedCount} already up to date.`,
@@ -208,6 +264,8 @@ async function runSyncDevelopedCommand(argv: string[]) {
     options: {
       "photo-dirs": { type: "string" },
       "dry-run": { type: "boolean", default: false },
+      quality: { type: "string" },
+      concurrency: { type: "string" },
     },
   });
 
@@ -222,32 +280,45 @@ async function runSyncDevelopedCommand(argv: string[]) {
     ? values["photo-dirs"].split(",").map((d) => d.trim())
     : getDefaultSyncDirectories(config.photoDirs);
 
+  const concurrency = values.concurrency
+    ? Number.parseInt(values.concurrency, 10)
+    : (config.concurrency ?? 4);
+  const quality = values.quality ? Number.parseInt(values.quality, 10) : config.jpegQuality;
+
   console.log(`Scanning developed session directory: ${sessionDir}`);
   const entries = await scanDevelopedSessionDirectory(sessionDir);
   console.log(
     `Found ${entries.length} base stems in session directory (${entries.reduce((acc, e) => acc + e.developments.length, 0)} developed variants).`,
   );
+  if (entries.length === 0) return;
 
   const { jpegByStem, rawByStem } = await buildStemFileIndex(archiveDirs);
   const client = new OmoideApiClient(config);
 
-  for (const entry of entries) {
+  const devBar = new CliProgressBar({
+    total: entries.length,
+    title: values["dry-run"] ? "Dry-run dev" : "Syncing dev",
+  });
+
+  await runWithConcurrency(entries, concurrency, async (entry) => {
     const jpegPath = entry.jpegPath ?? jpegByStem.get(entry.stem) ?? null;
     const rawPath = entry.rawPath ?? rawByStem.get(entry.stem) ?? null;
 
     if (!jpegPath) {
-      console.warn(
+      devBar.logAbove(
         `Warning: Could not find base JPEG for ${entry.stem} in session dir or archive dirs. Skipping.`,
       );
-      continue;
+      devBar.increment(1, `${entry.stem} (missing base)`);
+      return;
     }
 
-    const preparedBase = await prepareBasePhotoUpload(jpegPath);
+    const preparedBase = await prepareBasePhotoUpload(jpegPath, undefined, quality);
     if (values["dry-run"]) {
-      console.log(
+      devBar.logAbove(
         `[DRY-RUN] ${entry.stem} -> UUIDv7 ${preparedBase.photoId} | RAW: ${rawPath ? "yes" : "no"} | Developments: ${entry.developments.map((d) => `${d.format}:${d.label}`).join(", ")}`,
       );
-      continue;
+      devBar.increment(1, `${entry.stem} (dry-run)`);
+      return;
     }
 
     // Ensure base photo exists & mark as favorite since it was selected for development
@@ -256,25 +327,28 @@ async function runSyncDevelopedCommand(argv: string[]) {
       preparedBase.metadata,
       jpegPath,
       preparedBase.thumbAvifBuffer,
+      preparedBase.compressedJpegBuffer,
     );
-    console.log(`Synced base photo ${entry.stem} (${photoId})`);
+    devBar.logAbove(`Synced base photo ${entry.stem} (${photoId})`);
 
     if (rawPath) {
-      console.log(`  + Uploading 1:1 RAW ${path.basename(rawPath)}...`);
+      devBar.logAbove(`  + Uploading 1:1 RAW ${path.basename(rawPath)}...`);
       const rawMeta = await prepareRawUpload(rawPath);
       await client.uploadRawFile(photoId, rawMeta, rawPath);
     }
 
     for (const dev of entry.developments) {
-      console.log(
+      devBar.logAbove(
         `  + Uploading 1:N developed variant [${dev.format.toUpperCase()}] ${dev.label}...`,
       );
       const devMeta = await prepareDevelopmentUpload(dev.filePath, dev.format, dev.label);
       await client.uploadDevelopmentVariant(photoId, devMeta, dev.filePath);
     }
-  }
 
-  console.log("Developed session sync complete.");
+    devBar.increment(1, `${entry.stem} (done)`);
+  });
+
+  devBar.complete("Developed session sync complete.");
 }
 
 /**
@@ -288,6 +362,7 @@ async function runSyncFavoritesCommand(argv: string[]) {
     allowPositionals: true,
     options: {
       "dry-run": { type: "boolean", default: false },
+      concurrency: { type: "string" },
     },
   });
 
@@ -298,6 +373,10 @@ async function runSyncFavoritesCommand(argv: string[]) {
     console.error("Error: No local directories provided to locate .ARW files.");
     process.exit(1);
   }
+
+  const concurrency = values.concurrency
+    ? Number.parseInt(values.concurrency, 10)
+    : (config.concurrency ?? 4);
 
   const client = new OmoideApiClient(config);
 
@@ -317,25 +396,33 @@ async function runSyncFavoritesCommand(argv: string[]) {
   );
   const { rawByStem } = await buildStemFileIndex(searchDirs);
 
-  for (const photo of response.photos) {
+  const favBar = new CliProgressBar({
+    total: response.photos.length,
+    title: values["dry-run"] ? "Dry-run RAW" : "Uploading RAW",
+  });
+
+  await runWithConcurrency(response.photos, concurrency, async (photo) => {
     const stem = path.parse(photo.originalFilename).name.toUpperCase();
     const rawPath = rawByStem.get(stem);
     if (!rawPath) {
-      console.warn(`  - Could not find ${stem}.ARW locally for ${photo.id}`);
-      continue;
+      favBar.logAbove(`  - Could not find ${stem}.ARW locally for ${photo.id}`);
+      favBar.increment(1, `${stem} (not found)`);
+      return;
     }
 
     if (values["dry-run"]) {
-      console.log(`[DRY-RUN] Would upload ${rawPath} for favorite ${photo.id}`);
-      continue;
+      favBar.logAbove(`[DRY-RUN] Would upload RAW ${path.basename(rawPath)} -> photo ${photo.id}`);
+      favBar.increment(1, `${stem} (dry-run)`);
+      return;
     }
 
-    console.log(`  + Uploading ${rawPath} for ${photo.originalFilename} (${photo.id})...`);
+    favBar.logAbove(`Uploading ${path.basename(rawPath)} for photo ${photo.id}...`);
     const rawMeta = await prepareRawUpload(rawPath);
     await client.uploadRawFile(photo.id, rawMeta, rawPath);
-  }
+    favBar.increment(1, `${stem} (uploaded)`);
+  });
 
-  console.log("Favorites RAW sync complete.");
+  favBar.complete("Favorites RAW sync complete.");
 }
 
 /**

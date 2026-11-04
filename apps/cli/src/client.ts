@@ -19,6 +19,10 @@ export interface CliConfig {
   apiKey: string;
   /** Custom photo directories to scan by default (overrides DEFAULT_WINDOWS_PHOTO_DIRS on Windows) */
   photoDirs?: string[];
+  /** Default JPEG compression quality (1-100), e.g. 85. If omitted, uploads original byte-exact JPEG */
+  jpegQuality?: number;
+  /** Max concurrency for uploads (default: 4) */
+  concurrency?: number;
 }
 
 export function getConfigFilePath(): string {
@@ -37,6 +41,12 @@ export async function loadCliConfig(): Promise<CliConfig> {
         .map((s) => s.trim())
         .filter(Boolean)
     : undefined;
+  const envQuality = process.env.OMOIDE_JPEG_QUALITY
+    ? Number.parseInt(process.env.OMOIDE_JPEG_QUALITY, 10)
+    : undefined;
+  const envConcurrency = process.env.OMOIDE_CONCURRENCY
+    ? Number.parseInt(process.env.OMOIDE_CONCURRENCY, 10)
+    : undefined;
 
   const configPath = getConfigFilePath();
   if (existsSync(configPath)) {
@@ -46,6 +56,8 @@ export async function loadCliConfig(): Promise<CliConfig> {
       url: (envUrl ?? parsed.url ?? "http://localhost:3000").replace(/\/+$/, ""),
       apiKey: envKey ?? parsed.apiKey ?? "",
       photoDirs: envDirs ?? parsed.photoDirs,
+      jpegQuality: envQuality ?? parsed.jpegQuality,
+      concurrency: envConcurrency ?? parsed.concurrency,
     };
   }
 
@@ -53,6 +65,8 @@ export async function loadCliConfig(): Promise<CliConfig> {
     url: (envUrl ?? "http://localhost:3000").replace(/\/+$/, ""),
     apiKey: envKey ?? "",
     photoDirs: envDirs,
+    jpegQuality: envQuality,
+    concurrency: envConcurrency,
   };
 }
 
@@ -66,6 +80,8 @@ export async function saveCliConfig(config: CliConfig): Promise<string> {
         url: config.url.replace(/\/+$/, ""),
         apiKey: config.apiKey.trim(),
         ...(config.photoDirs && config.photoDirs.length > 0 ? { photoDirs: config.photoDirs } : {}),
+        ...(typeof config.jpegQuality === "number" ? { jpegQuality: config.jpegQuality } : {}),
+        ...(typeof config.concurrency === "number" ? { concurrency: config.concurrency } : {}),
       },
       null,
       2,
@@ -119,8 +135,9 @@ export class OmoideApiClient {
     metadata: UploadPhotoMetadata,
     jpegPath: string,
     thumbAvifBuffer: Buffer | null,
+    overrideJpegBuffer?: Buffer | null,
   ): Promise<{ photoId: string; photo: ApiPhotoDetail }> {
-    const jpegBytes = await readFile(jpegPath);
+    const jpegBytes = overrideJpegBuffer ?? (await readFile(jpegPath));
     const formData = new FormData();
     formData.append("metadata", JSON.stringify(metadata));
     formData.append(
