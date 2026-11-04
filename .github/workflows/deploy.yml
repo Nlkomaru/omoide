@@ -50,8 +50,8 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
           BETTER_AUTH_URL: ${{ secrets.BETTER_AUTH_URL }}
-          GITHUB_CLIENT_ID: ${{ secrets.GITHUB_CLIENT_ID }}
-          GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }}
+          GH_CLIENT_ID: ${{ secrets.GH_CLIENT_ID }}
+          GH_CLIENT_SECRET: ${{ secrets.GH_CLIENT_SECRET }}
           ALLOWED_USERS: ${{ secrets.ALLOWED_USERS }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -63,8 +63,8 @@ jobs:
           jq -n \
             --arg better_auth_secret "$BETTER_AUTH_SECRET" \
             --arg better_auth_url "$BETTER_AUTH_URL" \
-            --arg github_client_id "$GITHUB_CLIENT_ID" \
-            --arg github_client_secret "$GITHUB_CLIENT_SECRET" \
+            --arg gh_client_id "$GH_CLIENT_ID" \
+            --arg gh_client_secret "$GH_CLIENT_SECRET" \
             --arg allowed_users "$ALLOWED_USERS" \
             --arg r2_access_key_id "$R2_ACCESS_KEY_ID" \
             --arg r2_secret_access_key "$R2_SECRET_ACCESS_KEY" \
@@ -73,8 +73,8 @@ jobs:
             '{
               BETTER_AUTH_SECRET: $better_auth_secret,
               BETTER_AUTH_URL: $better_auth_url,
-              GITHUB_CLIENT_ID: $github_client_id,
-              GITHUB_CLIENT_SECRET: $github_client_secret,
+              GH_CLIENT_ID: $gh_client_id,
+              GH_CLIENT_SECRET: $gh_client_secret,
               ALLOWED_USERS: $allowed_users,
               R2_ACCESS_KEY_ID: $r2_access_key_id,
               R2_SECRET_ACCESS_KEY: $r2_secret_access_key,

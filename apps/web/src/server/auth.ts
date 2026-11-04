@@ -16,6 +16,9 @@ export function createAuth(env: Env) {
     .map((u) => u.trim().toLowerCase())
     .filter(Boolean);
 
+  const ghClientId = env.GH_CLIENT_ID || env.GITHUB_CLIENT_ID;
+  const ghClientSecret = env.GH_CLIENT_SECRET || env.GITHUB_CLIENT_SECRET;
+
   return betterAuth({
     secret: env.BETTER_AUTH_SECRET || DEFAULT_SECRET,
     baseURL: env.BETTER_AUTH_URL || "http://localhost:3000",
@@ -30,11 +33,11 @@ export function createAuth(env: Env) {
       },
     }),
     socialProviders:
-      env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET
+      ghClientId && ghClientSecret
         ? {
             github: {
-              clientId: env.GITHUB_CLIENT_ID,
-              clientSecret: env.GITHUB_CLIENT_SECRET,
+              clientId: ghClientId,
+              clientSecret: ghClientSecret,
               mapProfileToUser: (profile) => {
                 if (
                   allowedUsers.length > 0 &&
@@ -175,7 +178,9 @@ export async function resolveAuthenticatedActor(
 
   // If no GitHub OAuth credentials are set (e.g. local dev or behind Cloudflare Access edge),
   // ensure the default owner exists so gallery viewing & local CLI work seamlessly.
-  if (!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET) {
+  const ghClientId = env.GH_CLIENT_ID || env.GITHUB_CLIENT_ID;
+  const ghClientSecret = env.GH_CLIENT_SECRET || env.GITHUB_CLIENT_SECRET;
+  if (!ghClientId || !ghClientSecret) {
     const owner = await ensureDefaultOwner(db, env);
     return {
       userId: owner.id,
