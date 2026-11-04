@@ -20,9 +20,9 @@ export function Navbar() {
       <aside className="hidden md:flex fixed top-0 left-0 z-40 h-screen w-14 flex-col items-center justify-between border-r border-[#E4E4E7] bg-white/95 py-6 backdrop-blur-sm select-none">
         <Link
           to="/"
-          className="vertical-brand font-display-mono text-xs font-bold tracking-[0.22em] text-[#18181B] hover:text-[#2563EB] transition-colors"
+          className="vertical-brand font-display-mono text-xs font-semibold tracking-[0.28em] text-[#18181B] hover:text-[#2563EB] transition-colors"
         >
-          OMOIDE · α7C
+          OMOIDE
         </Link>
 
         <nav className="flex flex-col items-center gap-5" aria-label="Main">
@@ -85,7 +85,6 @@ export function Navbar() {
           >
             <BookOpen className="h-4 w-4" />
           </a>
-          <span className="font-mono-spec text-[10px] text-[#71717A]">7C</span>
         </div>
       </aside>
 
@@ -93,9 +92,9 @@ export function Navbar() {
       <header className="flex md:hidden sticky top-0 z-40 h-14 w-full items-center justify-between border-b border-[#E4E4E7] bg-white/95 px-4 backdrop-blur-sm">
         <Link
           to="/"
-          className="font-display-mono text-sm font-bold tracking-[0.18em] text-[#18181B]"
+          className="font-display-mono text-sm font-semibold tracking-[0.22em] text-[#18181B]"
         >
-          OMOIDE · α7C
+          OMOIDE
         </Link>
         <nav className="flex items-center gap-2">
           <Link

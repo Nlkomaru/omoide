@@ -112,14 +112,14 @@ function GalleryPage() {
 
   return (
     <main className="mx-auto max-w-6xl px-4 py-8 sm:px-8 md:py-12">
-      {/* Header Section (nikomaru-portfolio minimal aesthetic) */}
+      {/* Header Section (clean minimal aesthetic) */}
       <header className="flex flex-col gap-6 border-b border-[#E4E4E7] pb-8 md:flex-row md:items-end md:justify-between">
         <div className="space-y-2">
           <div className="inline-flex items-center gap-2 rounded-full border border-[#E4E4E7] bg-[#FAFAFA] px-3 py-1 font-mono-spec text-xs text-[#3F3F46]">
             <Camera className="h-3.5 w-3.5 text-[#18181B]" />
-            <span>SONY α7C (ILCE-7C) · ARCHIVE</span>
+            <span>PHOTOGRAPHY ARCHIVE</span>
           </div>
-          <h1 className="font-display-mono text-2xl font-bold tracking-tight text-[#18181B] sm:text-3xl">
+          <h1 className="font-display-mono text-2xl font-semibold tracking-tight text-[#18181B] sm:text-3xl">
             Omoide Photo Index
           </h1>
           <p className="max-w-xl text-sm text-[#71717A]">
@@ -294,11 +294,10 @@ function GalleryPage() {
             No photos match the current view
           </h2>
           <p className="mx-auto max-w-md text-xs text-[#71717A]">
-            Upload Sony α7C photos from your desktop (`F:\DCIM`, `G:\My Drive\Photography\picture`,
-            or developed `output/` folders) using the CLI:
+            Upload photos from your desktop (`F:\DCIM` or session folders) using the CLI:
           </p>
           <pre className="mx-auto max-w-lg overflow-x-auto rounded-lg border border-[#E4E4E7] bg-white p-3 text-left font-mono-spec text-xs text-[#18181B]">
-            pnpm --filter @omoide/cli dev sync &quot;F:\DCIM&quot;
+            pnpm --filter @omoide/cli dev sync
           </pre>
         </div>
       ) : (

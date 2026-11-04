@@ -9,11 +9,11 @@ export const Route = createRootRoute({
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Omoide — Sony α7C Photography Archive" },
+      { title: "Omoide — Photography Archive" },
       {
         name: "description",
         content:
-          "Personal photography archive, RAW & developed variants gallery, and EXIF browser for Sony α7C (ILCE-7C).",
+          "Personal photography archive, RAW & developed variants gallery, and EXIF browser.",
       },
     ],
     links: [{ rel: "stylesheet", href: appCss }],
