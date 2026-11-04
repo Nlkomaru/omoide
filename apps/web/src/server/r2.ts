@@ -85,6 +85,14 @@ export async function putR2Object(
 }
 
 /**
+ * Removes an object from Cloudflare R2 via the Worker binding `PHOTOS_BUCKET`. R2 treats a key that
+ * is already gone as success, so a retry after a partial failure is safe.
+ */
+export async function deleteR2Object(bucket: R2Bucket, key: string): Promise<void> {
+  await bucket.delete(key);
+}
+
+/**
  * Streams an object from Cloudflare R2 via the Worker binding `PHOTOS_BUCKET`.
  */
 export async function getR2ObjectResponse(
@@ -105,6 +113,7 @@ export async function getR2ObjectResponse(
   }
   headers.set("etag", object.httpEtag);
   headers.set("cache-control", "private, max-age=3600");
+  headers.set("x-content-type-options", "nosniff");
   if (downloadFilename) {
     headers.set(
       "content-disposition",

@@ -12,8 +12,10 @@ import { PhotoLightbox } from "~/components/PhotoLightbox";
 import { PhotoTable, PhotoTableSkeleton } from "~/components/PhotoTable";
 import { Button, buttonClassName, IconButton, Select, TextInput } from "~/components/ui";
 import { usePhotoList } from "~/lib/usePhotoList";
+import { usePhotoNavigation } from "~/lib/usePhotoNavigation";
 
 const PAGE_LIMIT = 100;
+const NO_PHOTOS: ApiPhotoSummary[] = [];
 
 export const Route = createFileRoute("/")({
   component: LibraryPage,
@@ -108,7 +110,33 @@ function LibraryPage() {
     [updatePhoto],
   );
 
+  /** The row reached with previous and next, which isn't the one that had the focus at opening. */
+  const steppedRef = useRef(false);
+  const handleNavigate = useCallback((photoId: string) => {
+    steppedRef.current = true;
+    setSelectedPhotoId(photoId);
+  }, []);
   const handleCloseDetail = useCallback(() => setSelectedPhotoId(null), []);
+
+  // Opening with a click on a cell leaves nothing focused to go back to, either.
+  const lastViewedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (selectedPhotoId !== null) {
+      lastViewedRef.current = selectedPhotoId;
+      return;
+    }
+    const lastViewed = lastViewedRef.current;
+    if (lastViewed === null) return;
+    const stepped = steppedRef.current;
+    lastViewedRef.current = null;
+    steppedRef.current = false;
+    if (!stepped && document.activeElement !== document.body) return;
+    scrollContainerRef.current
+      ?.querySelector<HTMLElement>(
+        `tr[data-photo-id="${CSS.escape(lastViewed)}"] [data-photo-open]`,
+      )
+      ?.focus({ preventScroll: true });
+  }, [selectedPhotoId]);
 
   function resetFilters() {
     setSearch("");
@@ -121,7 +149,17 @@ function LibraryPage() {
   }
 
   const facets = data?.facets;
-  const photos = data?.photos ?? [];
+  const photos = data?.photos ?? NO_PHOTOS;
+  const navigation = usePhotoNavigation({
+    photos,
+    selectedId: selectedPhotoId,
+    onNavigate: handleNavigate,
+    hasMore: (data?.nextCursor ?? null) !== null,
+    canLoadMore,
+    loadingMore,
+    loadMoreFailed: nextPageFailed,
+    loadMore: loadNextPage,
+  });
   const hasFilters = Boolean(
     search || lens || month || onlyFavorites || onlyRaw || onlyDeveloped || platform,
   );
@@ -312,6 +350,15 @@ function LibraryPage() {
       <PhotoHoverPreview target={previewTarget} />
       <PhotoLightbox
         photoId={selectedPhotoId}
+        summary={photos[navigation.index]}
+        position={navigation.index + 1}
+        total={Math.max(data?.matchedCount ?? 0, photos.length)}
+        hasPrevious={navigation.hasPrevious}
+        hasNext={navigation.hasNext}
+        waitingForNext={navigation.waitingForNext}
+        nextFailed={navigation.nextFailed}
+        onPrevious={navigation.goPrevious}
+        onNext={navigation.goNext}
         onClose={handleCloseDetail}
         onPhotoUpdated={updatePhoto}
       />

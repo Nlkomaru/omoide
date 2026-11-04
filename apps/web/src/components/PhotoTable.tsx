@@ -243,6 +243,7 @@ const PHOTO_COLUMNS = columnHelper.columns([
     <button
       type="button"
       title={photo.originalFilename}
+      data-photo-open
       onClick={() => onOpen(photo.id)}
       className="flex max-w-full cursor-pointer rounded-sm text-left font-medium text-ink"
     >
@@ -338,6 +339,7 @@ const PhotoRow = memo(
     return (
       // The row click is a mouse shortcut; the filename and thumbnail buttons are the keyboard path.
       <tr
+        data-photo-id={photo.id}
         aria-rowindex={rowIndex}
         aria-current={selected ? "true" : undefined}
         onClick={() => {
@@ -440,7 +442,14 @@ function PhotoRows({
     overscan: OVERSCAN_ROWS,
     // The sticky header sits in the scroll content above the first row.
     paddingStart: HEADER_HEIGHT_PX,
+    scrollPaddingStart: HEADER_HEIGHT_PX,
   });
+
+  // Stepping through photos in the detail view leaves the table showing the last one.
+  const selectedIndex = selectedPhotoId ? rows.findIndex((r) => r.id === selectedPhotoId) : -1;
+  useEffect(() => {
+    if (selectedIndex >= 0) virtualizer.scrollToIndex(selectedIndex, { align: "auto" });
+  }, [selectedIndex, virtualizer]);
 
   const virtualItems = virtualizer.getVirtualItems();
   const firstItem = virtualItems[0];

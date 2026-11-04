@@ -50,6 +50,7 @@ export const PhotoDevelopmentItemSchema = z.object({
   width: z.number().int(),
   height: z.number().int(),
   blurhash: z.string().nullable(),
+  isFavorite: z.boolean(),
   developedAt: z.number().int(),
   createdAt: z.number().int(),
 });
@@ -59,6 +60,8 @@ export const PhotoPostItemSchema = z.object({
   id: z.string(),
   photoId: z.string(),
   developmentId: z.string().nullable(),
+  /** The name of the version this post was of, once that version has been deleted. */
+  deletedVersionLabel: z.string().nullable(),
   platform: SocialPlatformSchema,
   postUrl: z.string().url(),
   externalPostId: z.string().nullable(),
@@ -164,6 +167,11 @@ export const UploadDevelopmentMetadataSchema = z.object({
   developedAt: z.number().int().optional(),
 });
 export type UploadDevelopmentMetadata = z.infer<typeof UploadDevelopmentMetadataSchema>;
+
+export const UpdateDevelopmentRequestSchema = z.object({
+  isFavorite: z.boolean().optional(),
+});
+export type UpdateDevelopmentRequest = z.infer<typeof UpdateDevelopmentRequestSchema>;
 
 export const CreatePhotoPostRequestSchema = z.object({
   developmentId: z.string().nullable().optional(),

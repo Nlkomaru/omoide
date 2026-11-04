@@ -83,7 +83,7 @@ export function Select({ size = "md", className = "", children, ...props }: Sele
   return (
     <span className={`relative inline-flex ${className}`}>
       <select
-        className={`w-full appearance-none pr-7 ${FIELD_BASE} ${FIELD_SIZES[size]}`}
+        className={`w-full min-w-0 appearance-none pr-7 ${FIELD_BASE} ${FIELD_SIZES[size]}`}
         {...props}
       >
         {children}
