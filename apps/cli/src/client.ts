@@ -17,6 +17,8 @@ import type {
 export interface CliConfig {
   url: string;
   apiKey: string;
+  /** Custom photo directories to scan by default (overrides DEFAULT_WINDOWS_PHOTO_DIRS on Windows) */
+  photoDirs?: string[];
 }
 
 export function getConfigFilePath(): string {
@@ -30,9 +32,11 @@ export function getConfigFilePath(): string {
 export async function loadCliConfig(): Promise<CliConfig> {
   const envUrl = process.env.OMOIDE_API_URL;
   const envKey = process.env.OMOIDE_API_KEY;
-  if (envUrl && envKey) {
-    return { url: envUrl.replace(/\/+$/, ""), apiKey: envKey };
-  }
+  const envDirs = process.env.OMOIDE_PHOTO_DIRS
+    ? process.env.OMOIDE_PHOTO_DIRS.split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : undefined;
 
   const configPath = getConfigFilePath();
   if (existsSync(configPath)) {
@@ -41,12 +45,14 @@ export async function loadCliConfig(): Promise<CliConfig> {
     return {
       url: (envUrl ?? parsed.url ?? "http://localhost:3000").replace(/\/+$/, ""),
       apiKey: envKey ?? parsed.apiKey ?? "",
+      photoDirs: envDirs ?? parsed.photoDirs,
     };
   }
 
   return {
     url: (envUrl ?? "http://localhost:3000").replace(/\/+$/, ""),
     apiKey: envKey ?? "",
+    photoDirs: envDirs,
   };
 }
 
@@ -59,6 +65,7 @@ export async function saveCliConfig(config: CliConfig): Promise<string> {
       {
         url: config.url.replace(/\/+$/, ""),
         apiKey: config.apiKey.trim(),
+        ...(config.photoDirs && config.photoDirs.length > 0 ? { photoDirs: config.photoDirs } : {}),
       },
       null,
       2,

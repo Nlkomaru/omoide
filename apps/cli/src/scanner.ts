@@ -3,7 +3,7 @@ import { readdir } from "node:fs/promises";
 import path from "node:path";
 import type { DevelopedFormat } from "@omoide/core";
 
-export const DEFAULT_WINDOWS_PHOTO_DIRS = ["F:\\DCIM", "G:\\My Drive\\Photography\\picture"];
+export const DEFAULT_WINDOWS_PHOTO_DIRS = ["F:\\DCIM", "F:\\"];
 
 const IGNORED_DIRS = new Set([
   ".git",
@@ -36,9 +36,17 @@ export interface ScannedDevelopedEntry {
   developments: DevelopedVariantFile[];
 }
 
-export function getDefaultSyncDirectories(): string[] {
+export function getDefaultSyncDirectories(configuredDirs?: string[]): string[] {
+  if (configuredDirs && configuredDirs.length > 0) {
+    return configuredDirs.filter((d) => existsSync(d));
+  }
   if (process.platform === "win32") {
-    return DEFAULT_WINDOWS_PHOTO_DIRS.filter((d) => existsSync(d));
+    // Only return existing directories; avoid duplicate F:\ if F:\DCIM already exists
+    const matched = DEFAULT_WINDOWS_PHOTO_DIRS.filter((d) => existsSync(d));
+    if (matched.includes("F:\\DCIM") && matched.includes("F:\\")) {
+      return ["F:\\DCIM"];
+    }
+    return matched;
   }
   return [];
 }

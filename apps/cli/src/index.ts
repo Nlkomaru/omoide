@@ -49,13 +49,13 @@ function printHelp() {
 Omoide CLI — Sony α7C (ILCE-7C) Photo Archive & RAW/Developed Sync Tool
 
 Usage:
-  omoide auth --url <server-url> --api-key <omod_...>
+  omoide auth --url <server-url> --api-key <omod_...> [--dirs <dir1,dir2>]
   omoide sync [paths...] [--with-raw] [--dry-run]
   omoide sync-developed <session-dir> [--photo-dirs <dir1,dir2>] [--dry-run]
   omoide sync-favorites [paths...] [--dry-run]
   omoide post add --photo <uuidv7> --platform <instagram|twitter|blog|portfolio> --url <post-url> [--caption <text>]
 
-Windows Default Directories (when no paths are passed to sync / sync-favorites):
+Default Windows Sync Directories (overridable in config or --dirs):
   - ${DEFAULT_WINDOWS_PHOTO_DIRS.join("\n  - ")}
 `);
 }
@@ -66,20 +66,34 @@ async function runAuthCommand(argv: string[]) {
     options: {
       url: { type: "string" },
       "api-key": { type: "string" },
+      dirs: { type: "string" },
     },
   });
 
   const existing = await loadCliConfig();
   const nextUrl = values.url ?? existing.url ?? "http://localhost:3000";
   const nextKey = values["api-key"] ?? existing.apiKey ?? "";
+  const nextDirs = values.dirs
+    ? values.dirs
+        .split(",")
+        .map((d) => d.trim())
+        .filter(Boolean)
+    : existing.photoDirs;
 
   if (!nextKey) {
     console.error("Error: --api-key <omod_...> is required.");
     process.exit(1);
   }
 
-  const savedPath = await saveCliConfig({ url: nextUrl, apiKey: nextKey });
+  const savedPath = await saveCliConfig({
+    url: nextUrl,
+    apiKey: nextKey,
+    photoDirs: nextDirs,
+  });
   console.log(`Saved Omoide CLI credentials to ${savedPath}`);
+  if (nextDirs && nextDirs.length > 0) {
+    console.log(`Configured default photo directories: ${nextDirs.join(", ")}`);
+  }
 }
 
 /**
@@ -97,12 +111,12 @@ async function runSyncCommand(argv: string[]) {
     },
   });
 
-  const targetDirs = positionals.length > 0 ? positionals : getDefaultSyncDirectories();
+  const config = await loadCliConfig();
+  const targetDirs =
+    positionals.length > 0 ? positionals : getDefaultSyncDirectories(config.photoDirs);
 
   if (targetDirs.length === 0) {
-    console.error(
-      "No directories specified and no default Windows drives (F:\\DCIM, G:\\My Drive\\Photography\\picture) found.",
-    );
+    console.error("No directories specified and no existing default photo drives found.");
     process.exit(1);
   }
 
@@ -111,7 +125,6 @@ async function runSyncCommand(argv: string[]) {
   console.log(`Found ${pairs.length} Sony α7C JPEG photos.`);
   if (pairs.length === 0) return;
 
-  const config = await loadCliConfig();
   const client = new OmoideApiClient(config);
 
   console.log("Computing SHA-256 hashes for deduplication...");
@@ -204,9 +217,10 @@ async function runSyncDevelopedCommand(argv: string[]) {
     process.exit(1);
   }
 
+  const config = await loadCliConfig();
   const archiveDirs = values["photo-dirs"]
     ? values["photo-dirs"].split(",").map((d) => d.trim())
-    : getDefaultSyncDirectories();
+    : getDefaultSyncDirectories(config.photoDirs);
 
   console.log(`Scanning developed session directory: ${sessionDir}`);
   const entries = await scanDevelopedSessionDirectory(sessionDir);
@@ -215,7 +229,6 @@ async function runSyncDevelopedCommand(argv: string[]) {
   );
 
   const { jpegByStem, rawByStem } = await buildStemFileIndex(archiveDirs);
-  const config = await loadCliConfig();
   const client = new OmoideApiClient(config);
 
   for (const entry of entries) {
@@ -278,13 +291,14 @@ async function runSyncFavoritesCommand(argv: string[]) {
     },
   });
 
-  const searchDirs = positionals.length > 0 ? positionals : getDefaultSyncDirectories();
+  const config = await loadCliConfig();
+  const searchDirs =
+    positionals.length > 0 ? positionals : getDefaultSyncDirectories(config.photoDirs);
   if (searchDirs.length === 0) {
     console.error("Error: No local directories provided to locate .ARW files.");
     process.exit(1);
   }
 
-  const config = await loadCliConfig();
   const client = new OmoideApiClient(config);
 
   const response = await client.listPhotos({
