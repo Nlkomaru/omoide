@@ -33,9 +33,9 @@ describe("renamer utilities", () => {
     expect(
       isAlreadyRenamedPath("/photos/2026-11-04/01931a2b-3c4d-7e5f-8a1b-0123456789ab.arw"),
     ).toBe(true);
-    expect(
-      isAlreadyRenamedPath("F:\\2024-05-12\\018f4a12-8765-7123-9abc-def012345678.jpg"),
-    ).toBe(true);
+    expect(isAlreadyRenamedPath("F:\\2024-05-12\\018f4a12-8765-7123-9abc-def012345678.jpg")).toBe(
+      true,
+    );
     expect(isAlreadyRenamedPath("F:\\DCIM\\10060905\\DSC02897.ARW")).toBe(false);
     expect(isAlreadyRenamedPath("/photos/DSC02897.JPG")).toBe(false);
   });
@@ -45,7 +45,10 @@ describe("executePhotoRename", () => {
   let tempDir: string;
 
   beforeEach(async () => {
-    tempDir = path.join(os.tmpdir(), `omoide-rename-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    tempDir = path.join(
+      os.tmpdir(),
+      `omoide-rename-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
     await mkdir(tempDir, { recursive: true });
   });
 
@@ -133,8 +136,11 @@ describe("executePhotoRename", () => {
     expect(existsSync(jpgFile)).toBe(false);
 
     // New files should exist
-    const rawItem = summary.items.find((i) => i.originalPath === rawFile)!;
-    const jpgItem = summary.items.find((i) => i.originalPath === jpgFile)!;
+    const rawItem = summary.items.find((i) => i.originalPath === rawFile);
+    const jpgItem = summary.items.find((i) => i.originalPath === jpgFile);
+    expect(rawItem).toBeDefined();
+    expect(jpgItem).toBeDefined();
+    if (!rawItem || !jpgItem) throw new Error("Expected items to be defined");
     expect(existsSync(rawItem.destinationPath)).toBe(true);
     expect(existsSync(jpgItem.destinationPath)).toBe(true);
 

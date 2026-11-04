@@ -39,8 +39,7 @@ const RAW_EXTS = new Set([".arw", ".cr2", ".cr3", ".nef", ".dng"]);
 const JPEG_EXTS = new Set([".jpg", ".jpeg", ".hif", ".heif"]);
 const SUPPORTED_EXTS = new Set([...RAW_EXTS, ...JPEG_EXTS]);
 
-const UUID_V7_REGEX =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_V7_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DATE_DIR_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
@@ -76,7 +75,10 @@ export function parseTimezoneOffsetMinutes(offset: string | undefined): number {
 /**
  * Formats a Unix timestamp (ms) and timezone offset into `YYYY-MM-DD`.
  */
-export function formatLocalDateString(timestampMs: number, timezoneOffset: string = "+09:00"): string {
+export function formatLocalDateString(
+  timestampMs: number,
+  timezoneOffset: string = "+09:00",
+): string {
   const offsetMinutes = parseTimezoneOffsetMinutes(timezoneOffset);
   const localDate = new Date(timestampMs + offsetMinutes * 60 * 1000);
   const year = localDate.getUTCFullYear();
