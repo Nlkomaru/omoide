@@ -21,6 +21,8 @@ export interface CliConfig {
   photoDirs?: string[];
   /** Default JPEG compression quality (1-100), e.g. 85. If omitted, uploads original byte-exact JPEG */
   jpegQuality?: number;
+  /** Max target byte size for compressed JPEG (e.g. 1048576 for 1MB) */
+  maxBytes?: number;
   /** Max concurrency for uploads (default: 4) */
   concurrency?: number;
 }
@@ -44,6 +46,9 @@ export async function loadCliConfig(): Promise<CliConfig> {
   const envQuality = process.env.OMOIDE_JPEG_QUALITY
     ? Number.parseInt(process.env.OMOIDE_JPEG_QUALITY, 10)
     : undefined;
+  const envMaxBytes = process.env.OMOIDE_MAX_BYTES
+    ? Number.parseInt(process.env.OMOIDE_MAX_BYTES, 10)
+    : undefined;
   const envConcurrency = process.env.OMOIDE_CONCURRENCY
     ? Number.parseInt(process.env.OMOIDE_CONCURRENCY, 10)
     : undefined;
@@ -57,6 +62,7 @@ export async function loadCliConfig(): Promise<CliConfig> {
       apiKey: envKey ?? parsed.apiKey ?? "",
       photoDirs: envDirs ?? parsed.photoDirs,
       jpegQuality: envQuality ?? parsed.jpegQuality,
+      maxBytes: envMaxBytes ?? parsed.maxBytes,
       concurrency: envConcurrency ?? parsed.concurrency,
     };
   }
@@ -66,6 +72,7 @@ export async function loadCliConfig(): Promise<CliConfig> {
     apiKey: envKey ?? "",
     photoDirs: envDirs,
     jpegQuality: envQuality,
+    maxBytes: envMaxBytes,
     concurrency: envConcurrency,
   };
 }
@@ -81,6 +88,7 @@ export async function saveCliConfig(config: CliConfig): Promise<string> {
         apiKey: config.apiKey.trim(),
         ...(config.photoDirs && config.photoDirs.length > 0 ? { photoDirs: config.photoDirs } : {}),
         ...(typeof config.jpegQuality === "number" ? { jpegQuality: config.jpegQuality } : {}),
+        ...(typeof config.maxBytes === "number" ? { maxBytes: config.maxBytes } : {}),
         ...(typeof config.concurrency === "number" ? { concurrency: config.concurrency } : {}),
       },
       null,

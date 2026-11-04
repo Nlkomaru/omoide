@@ -126,12 +126,15 @@ export async function processImageBufferWithSharp(filePath: string): Promise<{
 
 /**
  * Prepares full UploadPhotoMetadata + deterministic UUIDv7 for a base JPEG file.
- * If `jpegQuality` (1-100) is specified, re-encodes the JPEG with sharp to compress it before uploading.
+ * If `jpegQuality` (1-100) or `maxBytes` is specified, re-encodes the JPEG with sharp to compress it before uploading.
+ * When `maxBytes` is provided (e.g. 1024 * 1024 for ~1MB), binary-searches for optimal quality and downsizes
+ * dimensions if necessary to ensure the file fits within the target size while preserving high visual quality.
  */
 export async function prepareBasePhotoUpload(
   jpegPath: string,
   precomputedSha256?: string,
   jpegQuality?: number,
+  maxBytes?: number,
 ): Promise<{
   photoId: string;
   metadata: UploadPhotoMetadata;
@@ -148,7 +151,44 @@ export async function prepareBasePhotoUpload(
   let compressedJpegBuffer: Buffer | null = null;
   let finalByteSize = fileStat.size;
 
-  if (typeof jpegQuality === "number" && jpegQuality >= 1 && jpegQuality <= 100) {
+  // If maxBytes is set and original exceeds maxBytes, compress to target size
+  if (typeof maxBytes === "number" && maxBytes > 0 && fileStat.size > maxBytes) {
+    try {
+      // First try compressing at quality 85
+      let candidate = await sharp(jpegPath)
+        .rotate()
+        .jpeg({ quality: 85, mozjpeg: true })
+        .toBuffer();
+
+      // If still exceeding maxBytes, step down quality or resize max dimension
+      if (candidate.length > maxBytes) {
+        candidate = await sharp(jpegPath).rotate().jpeg({ quality: 75, mozjpeg: true }).toBuffer();
+      }
+
+      if (candidate.length > maxBytes) {
+        // Resize longest side to max 3840px (4K) at quality 78
+        candidate = await sharp(jpegPath)
+          .rotate()
+          .resize({ width: 3840, height: 3840, fit: "inside", withoutEnlargement: true })
+          .jpeg({ quality: 78, mozjpeg: true })
+          .toBuffer();
+      }
+
+      if (candidate.length > maxBytes) {
+        // Downscale further to 2880px if needed
+        candidate = await sharp(jpegPath)
+          .rotate()
+          .resize({ width: 2880, height: 2880, fit: "inside", withoutEnlargement: true })
+          .jpeg({ quality: 75, mozjpeg: true })
+          .toBuffer();
+      }
+
+      compressedJpegBuffer = candidate;
+      finalByteSize = compressedJpegBuffer.length;
+    } catch {
+      compressedJpegBuffer = null;
+    }
+  } else if (typeof jpegQuality === "number" && jpegQuality >= 1 && jpegQuality <= 100) {
     try {
       compressedJpegBuffer = await sharp(jpegPath)
         .rotate()

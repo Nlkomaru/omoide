@@ -51,9 +51,9 @@ function printHelp() {
 Omoide CLI — Sony α7C (ILCE-7C) Photo Archive & RAW/Developed Sync Tool
 
 Usage:
-  omoide auth --url <server-url> --api-key <omod_...> [--dirs <dir1,dir2>] [--quality <80-100>] [--concurrency <4>]
-  omoide sync [paths...] [--with-raw] [--quality <1-100>] [--concurrency <4>] [--dry-run]
-  omoide sync-developed <session-dir> [--photo-dirs <dir1,dir2>] [--concurrency <4>] [--dry-run]
+  omoide auth --url <server-url> --api-key <omod_...> [--dirs <dir1,dir2>] [--quality <80-100>] [--max-bytes <1048576>] [--concurrency <4>]
+  omoide sync [paths...] [--with-raw] [--quality <1-100>] [--max-bytes <bytes>] [--concurrency <4>] [--dry-run]
+  omoide sync-developed <session-dir> [--photo-dirs <dir1,dir2>] [--quality <1-100>] [--max-bytes <bytes>] [--concurrency <4>] [--dry-run]
   omoide sync-favorites [paths...] [--concurrency <4>] [--dry-run]
   omoide post add --photo <uuidv7> --platform <instagram|twitter|blog|portfolio> --url <post-url> [--caption <text>]
 
@@ -70,6 +70,7 @@ async function runAuthCommand(argv: string[]) {
       "api-key": { type: "string" },
       dirs: { type: "string" },
       quality: { type: "string" },
+      "max-bytes": { type: "string" },
       concurrency: { type: "string" },
     },
   });
@@ -84,6 +85,9 @@ async function runAuthCommand(argv: string[]) {
         .filter(Boolean)
     : existing.photoDirs;
   const nextQuality = values.quality ? Number.parseInt(values.quality, 10) : existing.jpegQuality;
+  const nextMaxBytes = values["max-bytes"]
+    ? Number.parseInt(values["max-bytes"], 10)
+    : existing.maxBytes;
   const nextConcurrency = values.concurrency
     ? Number.parseInt(values.concurrency, 10)
     : existing.concurrency;
@@ -98,6 +102,7 @@ async function runAuthCommand(argv: string[]) {
     apiKey: nextKey,
     photoDirs: nextDirs,
     jpegQuality: Number.isNaN(nextQuality) ? undefined : nextQuality,
+    maxBytes: Number.isNaN(nextMaxBytes) ? undefined : nextMaxBytes,
     concurrency: Number.isNaN(nextConcurrency) ? undefined : nextConcurrency,
   });
   console.log(`Saved Omoide CLI credentials to ${savedPath}`);
@@ -106,6 +111,9 @@ async function runAuthCommand(argv: string[]) {
   }
   if (typeof nextQuality === "number") {
     console.log(`Configured default JPEG quality: ${nextQuality}`);
+  }
+  if (typeof nextMaxBytes === "number") {
+    console.log(`Configured default max JPEG size: ${Math.round(nextMaxBytes / 1024)}KB`);
   }
   if (typeof nextConcurrency === "number") {
     console.log(`Configured default concurrency: ${nextConcurrency}`);
@@ -125,6 +133,7 @@ async function runSyncCommand(argv: string[]) {
       "with-raw": { type: "boolean", default: false },
       "dry-run": { type: "boolean", default: false },
       quality: { type: "string" },
+      "max-bytes": { type: "string" },
       concurrency: { type: "string" },
     },
   });
@@ -142,6 +151,9 @@ async function runSyncCommand(argv: string[]) {
     ? Number.parseInt(values.concurrency, 10)
     : (config.concurrency ?? 4);
   const quality = values.quality ? Number.parseInt(values.quality, 10) : config.jpegQuality;
+  const maxBytes = values["max-bytes"]
+    ? Number.parseInt(values["max-bytes"], 10)
+    : (config.maxBytes ?? 1024 * 1024); // default ~1MB target if neither specified or maxBytes in config
 
   console.log(`Scanning directories:\n  - ${targetDirs.join("\n  - ")}`);
   const pairs = await scanPhotoDirectories(targetDirs);
@@ -205,7 +217,7 @@ async function runSyncCommand(argv: string[]) {
       return;
     }
 
-    const prepared = await prepareBasePhotoUpload(pair.jpegPath, sha, quality);
+    const prepared = await prepareBasePhotoUpload(pair.jpegPath, sha, quality, maxBytes);
     if (values["dry-run"]) {
       syncBar.logAbove(
         `[DRY-RUN] Would upload ${pair.stem} (${prepared.photoId}) — ${prepared.metadata.exif.lensModel ?? "ILCE-7C"}${
@@ -265,6 +277,7 @@ async function runSyncDevelopedCommand(argv: string[]) {
       "photo-dirs": { type: "string" },
       "dry-run": { type: "boolean", default: false },
       quality: { type: "string" },
+      "max-bytes": { type: "string" },
       concurrency: { type: "string" },
     },
   });
@@ -284,6 +297,9 @@ async function runSyncDevelopedCommand(argv: string[]) {
     ? Number.parseInt(values.concurrency, 10)
     : (config.concurrency ?? 4);
   const quality = values.quality ? Number.parseInt(values.quality, 10) : config.jpegQuality;
+  const maxBytes = values["max-bytes"]
+    ? Number.parseInt(values["max-bytes"], 10)
+    : (config.maxBytes ?? 1024 * 1024);
 
   console.log(`Scanning developed session directory: ${sessionDir}`);
   const entries = await scanDevelopedSessionDirectory(sessionDir);
@@ -312,7 +328,7 @@ async function runSyncDevelopedCommand(argv: string[]) {
       return;
     }
 
-    const preparedBase = await prepareBasePhotoUpload(jpegPath, undefined, quality);
+    const preparedBase = await prepareBasePhotoUpload(jpegPath, undefined, quality, maxBytes);
     if (values["dry-run"]) {
       devBar.logAbove(
         `[DRY-RUN] ${entry.stem} -> UUIDv7 ${preparedBase.photoId} | RAW: ${rawPath ? "yes" : "no"} | Developments: ${entry.developments.map((d) => `${d.format}:${d.label}`).join(", ")}`,
