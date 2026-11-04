@@ -11,6 +11,7 @@ import {
   prepareRawUpload,
 } from "./processor";
 import { CliProgressBar } from "./progress";
+import { executePhotoRename, scanDirectoriesForRename } from "./renamer";
 import {
   buildStemFileIndex,
   DEFAULT_WINDOWS_PHOTO_DIRS,
@@ -18,7 +19,6 @@ import {
   scanDevelopedSessionDirectory,
   scanPhotoDirectories,
 } from "./scanner";
-import { executePhotoRename, scanDirectoriesForRename } from "./renamer";
 
 async function main() {
   const args = process.argv.slice(2);
@@ -512,13 +512,13 @@ async function runRenameCommand(argv: string[]) {
 
   const config = await loadCliConfig();
   const targetDirs =
-    positionals.length > 0
-      ? positionals
-      : getDefaultSyncDirectories(config.photoDirs);
+    positionals.length > 0 ? positionals : getDefaultSyncDirectories(config.photoDirs);
 
   if (targetDirs.length === 0) {
     console.error("Error: No photo directories found to scan for rename.");
-    console.error("Specify directories directly (e.g. `omoide rename F:\\DCIM`) or configure photoDirs.");
+    console.error(
+      "Specify directories directly (e.g. `omoide rename F:\\DCIM`) or configure photoDirs.",
+    );
     process.exit(1);
   }
 
@@ -542,7 +542,9 @@ async function runRenameCommand(argv: string[]) {
   const { groups, skippedAlreadyRenamed } = await scanDirectoriesForRename(targetDirs);
 
   if (skippedAlreadyRenamed > 0) {
-    console.log(`Skipped ${skippedAlreadyRenamed} files already formatted as YYYY-MM-DD/<uuidv7>.<ext>.`);
+    console.log(
+      `Skipped ${skippedAlreadyRenamed} files already formatted as YYYY-MM-DD/<uuidv7>.<ext>.`,
+    );
   }
 
   if (groups.length === 0) {
@@ -554,7 +556,9 @@ async function runRenameCommand(argv: string[]) {
   for (const g of groups) {
     totalFilesToProcess += g.files.length;
   }
-  console.log(`Found ${groups.length} photo groups (${totalFilesToProcess} total files) to process.\n`);
+  console.log(
+    `Found ${groups.length} photo groups (${totalFilesToProcess} total files) to process.\n`,
+  );
 
   const summary = await executePhotoRename(groups, {
     dest: destDir,
