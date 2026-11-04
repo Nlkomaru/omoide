@@ -1,0 +1,1 @@
+CREATE INDEX `idx_photo_developments_user_id` ON `photo_developments` (`user_id`);

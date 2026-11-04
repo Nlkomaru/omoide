@@ -210,6 +210,7 @@ export const photoDevelopments = sqliteTable(
   },
   (table) => [
     index("idx_photo_developments_photo_id").on(table.photoId),
+    index("idx_photo_developments_user_id").on(table.userId),
     uniqueIndex("idx_photo_developments_sha256").on(table.photoId, table.sha256),
   ],
 );

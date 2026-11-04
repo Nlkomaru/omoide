@@ -458,6 +458,130 @@ describe("Omoide REST API (@omoide/web)", () => {
     expect(listBody.facets.developedCount).toBe(1);
   });
 
+  describe("GET /api/v1/photos paging", () => {
+    const BASE_TAKEN_AT = Date.parse("2026-11-03T08:00:00+09:00");
+
+    interface ListBody {
+      photos: Array<{ id: string; takenAt: number }>;
+      nextCursor: string | null;
+      matchedCount: number;
+      facets: { totalCount: number };
+    }
+
+    async function uploadPhoto(index: number, takenAt: number, lensModel: string) {
+      const res = await app.request(
+        "/api/v1/photos",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            metadata: {
+              originalFilename: `DSC${String(index).padStart(5, "0")}.JPG`,
+              jpegSha256: index.toString(16).repeat(64),
+              jpegByteSize: 1024,
+              width: 6000,
+              height: 4000,
+              isFavorite: false,
+              exif: {
+                takenAt,
+                timezoneOffset: "+09:00",
+                cameraMake: "SONY",
+                cameraModel: "ILCE-7C",
+                lensModel,
+                exifJson: { focalLength35mm: 35, exposureCompensation: 0 },
+              },
+            },
+            jpegBase64: btoa("fake-jpeg-binary"),
+          }),
+        },
+        env,
+      );
+      expect(res.status).toBe(201);
+    }
+
+    /** One newer photo, five sharing a timestamp, one older: seven in total. */
+    async function seedBurst() {
+      await uploadPhoto(1, BASE_TAKEN_AT + 1000, "lens-a");
+      for (let i = 2; i <= 6; i++) {
+        await uploadPhoto(i, BASE_TAKEN_AT, i % 2 === 0 ? "lens-a" : "lens-b");
+      }
+      await uploadPhoto(7, BASE_TAKEN_AT - 1000, "lens-b");
+    }
+
+    async function listPage(params: Record<string, string>): Promise<ListBody> {
+      const res = await app.request(`/api/v1/photos?${new URLSearchParams(params)}`, {}, env);
+      expect(res.status).toBe(200);
+      return (await res.json()) as ListBody;
+    }
+
+    async function listAllPages(params: Record<string, string>) {
+      const pages: ListBody[] = [];
+      let cursor: string | null = null;
+      do {
+        const page: ListBody = await listPage(cursor ? { ...params, cursor } : params);
+        pages.push(page);
+        cursor = page.nextCursor;
+      } while (cursor !== null && pages.length < 20);
+      return pages;
+    }
+
+    it("returns every photo exactly once when a page boundary splits a same-timestamp group", async () => {
+      await seedBurst();
+
+      const { photos: everything } = await listPage({ limit: "100" });
+      expect(everything).toHaveLength(7);
+
+      // A page size of 3 ends pages one and two inside the same-timestamp group.
+      const pages = await listAllPages({ limit: "3" });
+      expect(pages.map((page) => page.photos.length)).toEqual([3, 3, 1]);
+      expect(pages[0]?.photos.at(-1)?.takenAt).toBe(BASE_TAKEN_AT);
+      expect(pages[1]?.photos[0]?.takenAt).toBe(BASE_TAKEN_AT);
+
+      const pagedIds = pages.flatMap((page) => page.photos.map((photo) => photo.id));
+      expect(pagedIds).toEqual(everything.map((photo) => photo.id));
+      expect(new Set(pagedIds).size).toBe(7);
+    });
+
+    it("returns a null nextCursor on the last page, including one that ends exactly on the limit", async () => {
+      await seedBurst();
+
+      expect((await listPage({ limit: "7" })).nextCursor).toBeNull();
+
+      const pages = await listAllPages({ limit: "3" });
+      expect(pages.at(-1)?.nextCursor).toBeNull();
+      expect(pages.slice(0, -1).every((page) => page.nextCursor !== null)).toBe(true);
+    });
+
+    it("counts matchedCount across the filters, before the cursor and limit", async () => {
+      await seedBurst();
+
+      const unfiltered = await listAllPages({ limit: "3" });
+      expect(unfiltered.map((page) => page.matchedCount)).toEqual([7, 7, 7]);
+
+      // lens-b: photos 3 and 5 in the burst, plus the older photo 7.
+      const filtered = await listAllPages({ limit: "2", lens: "lens-b" });
+      expect(filtered.map((page) => page.matchedCount)).toEqual([3, 3]);
+      expect(filtered.flatMap((page) => page.photos)).toHaveLength(3);
+      expect(filtered[0]?.facets.totalCount).toBe(7);
+
+      expect((await listPage({ lens: "no-such-lens" })).matchedCount).toBe(0);
+    });
+
+    it("still accepts a bare numeric cursor and ignores a malformed one", async () => {
+      await seedBurst();
+
+      const bare = await listPage({ limit: "100", cursor: String(BASE_TAKEN_AT) });
+      expect(bare.photos).toHaveLength(1);
+      expect(bare.photos[0]?.takenAt).toBe(BASE_TAKEN_AT - 1000);
+      expect(bare.matchedCount).toBe(7);
+
+      for (const cursor of ["not-a-cursor", "_abc", "123_"]) {
+        const malformed = await listPage({ limit: "100", cursor });
+        expect(malformed.photos).toHaveLength(7);
+      }
+    });
+  });
+
   it("resolves request origin for custom domain, branch preview, and commit preview URLs", () => {
     const prodReq = new Request("https://omoide.nikomaru.dev/api/auth/session", {
       headers: { host: "omoide.nikomaru.dev", "x-forwarded-proto": "https" },

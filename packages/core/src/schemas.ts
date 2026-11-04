@@ -196,6 +196,8 @@ export type ListPhotosQuery = z.infer<typeof ListPhotosQuerySchema>;
 export const ListPhotosResponseSchema = z.object({
   photos: z.array(ApiPhotoSummarySchema),
   nextCursor: z.string().nullable(),
+  /** Photos matching the filters, before the cursor and limit apply. */
+  matchedCount: z.number().int(),
   facets: z.object({
     lenses: z.array(z.object({ lensModel: z.string(), count: z.number().int() })),
     months: z.array(z.object({ month: z.string(), count: z.number().int() })),

@@ -1,5 +1,5 @@
 import { blurhashToCssGradientString } from "@unpic/placeholder";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 interface BlurhashImageProps {
   src: string;
@@ -20,6 +20,12 @@ export function BlurhashImage({
 }: BlurhashImageProps) {
   const [loaded, setLoaded] = useState(false);
 
+  // A cached image fires no fade: a virtualized row remounting on scroll should not flash its
+  // placeholder again.
+  const imageRef = useCallback((image: HTMLImageElement | null) => {
+    if (image?.complete && image.naturalWidth > 0) setLoaded(true);
+  }, []);
+
   const backgroundImage = useMemo(() => {
     if (!blurhash || blurhash.length < 6) return undefined;
     try {
@@ -32,8 +38,9 @@ export function BlurhashImage({
   const aspectRatio = width > 0 && height > 0 ? `${width} / ${height}` : "3 / 2";
 
   return (
-    <div
-      className={`relative overflow-hidden bg-[#F4F4F5] ${className}`}
+    // A span, because a thumbnail sits inside a button, which only allows phrasing content.
+    <span
+      className={`relative block overflow-hidden bg-subtle ${className}`}
       style={{
         aspectRatio,
         backgroundImage,
@@ -42,6 +49,7 @@ export function BlurhashImage({
       }}
     >
       <img
+        ref={imageRef}
         src={src}
         alt={alt}
         width={width}
@@ -49,10 +57,10 @@ export function BlurhashImage({
         loading="lazy"
         decoding="async"
         onLoad={() => setLoaded(true)}
-        className={`h-full w-full object-cover transition-all duration-500 ease-out group-hover:scale-[1.03] ${
+        className={`h-full w-full object-cover transition-opacity duration-500 ease-out ${
           loaded ? "opacity-100" : "opacity-0"
         }`}
       />
-    </div>
+    </span>
   );
 }

@@ -497,6 +497,29 @@ export async function getPhotoDetailById(
   };
 }
 
+interface ListCursor {
+  takenAt: number;
+  /** Null for the bare timestamp cursors that older CLI builds may still send. */
+  id: string | null;
+}
+
+/** Reads `<takenAt>_<id>` or a bare `<takenAt>`. Malformed cursors are ignored. */
+function parseListCursor(cursor: string | undefined): ListCursor | null {
+  if (!cursor) return null;
+  const compound = /^(-?\d+)_(.+)$/.exec(cursor);
+  if (compound?.[1] && compound[2]) {
+    return { takenAt: Number(compound[1]), id: compound[2] };
+  }
+  const takenAt = Number(cursor);
+  return Number.isFinite(takenAt) ? { takenAt, id: null } : null;
+}
+
+/** Mirrors the list order, `takenAt` then `id`, both descending. */
+function isAfterCursor(photo: { takenAt: number; id: string }, cursor: ListCursor): boolean {
+  if (photo.takenAt !== cursor.takenAt) return photo.takenAt < cursor.takenAt;
+  return cursor.id !== null && photo.id < cursor.id;
+}
+
 export async function listPhotosForUser(
   db: AppDatabase,
   userId: string,
@@ -509,32 +532,16 @@ export async function listPhotosForUser(
     .where(eq(photos.userId, userId))
     .orderBy(desc(photos.takenAt), desc(photos.id));
 
-  const photoIds = allUserPhotos.map((p) => p.id);
-  const idChunks = chunkArray(photoIds, 60);
+  // Filtering by owner keeps this at one query each, however large the library is.
+  const devRows = await db
+    .select({ photoId: photoDevelopments.photoId })
+    .from(photoDevelopments)
+    .where(eq(photoDevelopments.userId, userId));
 
-  const devRows: { photoId: string; id: string }[] = [];
-  for (const chunk of idChunks) {
-    const rows = await db
-      .select({
-        photoId: photoDevelopments.photoId,
-        id: photoDevelopments.id,
-      })
-      .from(photoDevelopments)
-      .where(inArray(photoDevelopments.photoId, chunk));
-    devRows.push(...rows);
-  }
-
-  const postRows: { photoId: string; platform: SocialPlatform }[] = [];
-  for (const chunk of idChunks) {
-    const rows = await db
-      .select({
-        photoId: photoPosts.photoId,
-        platform: photoPosts.platform,
-      })
-      .from(photoPosts)
-      .where(inArray(photoPosts.photoId, chunk));
-    postRows.push(...rows);
-  }
+  const postRows = await db
+    .select({ photoId: photoPosts.photoId, platform: photoPosts.platform })
+    .from(photoPosts)
+    .where(eq(photoPosts.userId, userId));
 
   const devCountByPhoto = new Map<string, number>();
   for (const dev of devRows) {
@@ -569,7 +576,7 @@ export async function listPhotosForUser(
   }
 
   // Apply query filters
-  const filtered = allUserPhotos.filter((p) => {
+  const matching = allUserPhotos.filter((p) => {
     if (query.lens && p.lensModel !== query.lens) return false;
     if (
       query.minFocal !== undefined &&
@@ -611,20 +618,17 @@ export async function listPhotosForUser(
       if (!matchFilename && !matchLens && !matchDesc && !matchId) return false;
     }
 
-    if (query.cursor) {
-      const cursorTime = Number(query.cursor);
-      if (Number.isFinite(cursorTime) && p.takenAt >= cursorTime) {
-        return false;
-      }
-    }
-
     return true;
   });
 
+  const cursor = parseListCursor(query.cursor);
+  const remaining = cursor ? matching.filter((p) => isAfterCursor(p, cursor)) : matching;
+
   const limit = query.limit ?? 60;
-  const page = filtered.slice(0, limit);
+  const page = remaining.slice(0, limit);
+  const lastRow = page[page.length - 1];
   const nextCursor =
-    filtered.length > limit && page.length > 0 ? String(page[page.length - 1]?.takenAt) : null;
+    remaining.length > limit && lastRow ? `${lastRow.takenAt}_${lastRow.id}` : null;
 
   const summaries: ApiPhotoSummary[] = page.map((row) => ({
     id: row.id,
@@ -662,6 +666,7 @@ export async function listPhotosForUser(
   return {
     photos: summaries,
     nextCursor,
+    matchedCount: matching.length,
     facets: {
       lenses: Array.from(lensCounts.entries())
         .map(([lensModel, count]) => ({ lensModel, count }))

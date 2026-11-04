@@ -1,6 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Check, Copy, KeyRound, Plus, Terminal, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { Check, Copy } from "lucide-react";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
+import { Button, TextInput } from "~/components/ui";
+import { formatLocalTime } from "~/lib/format";
 
 interface ApiKeyItem {
   id: string;
@@ -21,21 +23,74 @@ interface MeResponse {
   apiKeys: ApiKeyItem[];
 }
 
+const AUTH_METHOD_LABELS: Record<string, string> = {
+  session: "GitHub session",
+  api_key: "API key",
+  cf_access: "Cloudflare Access",
+  local_owner: "Local owner",
+};
+
+const CLI_COMMANDS = [
+  "# 1. Configure server URL and API key",
+  "pnpm --filter @omoide/cli dev auth --url http://localhost:3000 --api-key omod_...",
+  "",
+  "# 2. Sync base JPEGs from Windows default drives (F:\\DCIM and G:\\My Drive\\Photography\\picture)",
+  "pnpm --filter @omoide/cli dev sync",
+  "",
+  "# 3. Sync a developed session folder (pairs .ARW + output/webp/* + output/png/*)",
+  'pnpm --filter @omoide/cli dev sync-developed "D:\\Pictures\\photos\\2026-06-16_higashiyama"',
+  "",
+  "# 4. Upload .ARW RAW files for photos favorited in the Web UI",
+  "pnpm --filter @omoide/cli dev sync-favorites",
+].join("\n");
+
 export const Route = createFileRoute("/settings")({
   component: SettingsPage,
 });
 
+function Section({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="border-t border-line py-6 lg:grid lg:grid-cols-[12rem_minmax(0,1fr)] lg:gap-6">
+      <h2 className="font-semibold">{title}</h2>
+      <div className="mt-2 min-w-0 lg:mt-0">{children}</div>
+    </section>
+  );
+}
+
+function AccountRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex gap-4 py-1">
+      <dt className="w-28 shrink-0 text-ink-muted">{label}</dt>
+      <dd className="min-w-0 break-words">{children}</dd>
+    </div>
+  );
+}
+
+/** Phones show the date alone, which leaves room for Revoke; the time stays in the title. */
+function CreatedCell({ createdAt }: { createdAt: number }) {
+  const created = formatLocalTime(createdAt);
+  return (
+    <td title={created} className="py-1.5 pr-4 whitespace-nowrap text-ink-muted tabular-nums">
+      {created.slice(0, 10)}
+      <span className="hidden sm:inline">{created.slice(10)}</span>
+    </td>
+  );
+}
+
 function SettingsPage() {
   const [me, setMe] = useState<MeResponse | null>(null);
+  const [loaded, setLoaded] = useState(false);
   const [keyName, setKeyName] = useState("desktop-cli");
   const [newlyCreatedKey, setNewlyCreatedKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
   const loadMe = useCallback(async () => {
-    const res = await fetch("/api/v1/me");
-    if (res.ok) {
-      const data = (await res.json()) as MeResponse;
-      setMe(data);
+    try {
+      const res = await fetch("/api/v1/me");
+      // Clear on failure so a signed-out visitor is not left looking at the previous account.
+      setMe(res.ok ? ((await res.json()) as MeResponse) : null);
+    } finally {
+      setLoaded(true);
     }
   }, []);
 
@@ -53,6 +108,7 @@ function SettingsPage() {
     if (res.ok) {
       const created = (await res.json()) as { key: string };
       setNewlyCreatedKey(created.key);
+      setCopied(false);
       await loadMe();
     }
   }
@@ -96,188 +152,136 @@ function SettingsPage() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({}),
     });
+    setNewlyCreatedKey(null);
     await loadMe();
   }
 
-  return (
-    <main className="mx-auto max-w-4xl px-4 py-8 sm:px-8 md:py-12 space-y-8">
-      <header className="space-y-2 border-b border-[#E4E4E7] pb-6">
-        <div className="inline-flex items-center gap-2 rounded-full border border-[#E4E4E7] bg-[#FAFAFA] px-3 py-1 font-mono-spec text-xs text-[#3F3F46]">
-          <KeyRound className="h-3.5 w-3.5 text-[#18181B]" />
-          <span>AUTHENTICATION &amp; CLI KEYS</span>
-        </div>
-        <h1 className="font-display-mono text-2xl font-bold text-[#18181B]">
-          Settings &amp; CLI Uploader Credentials
-        </h1>
-        <p className="text-sm text-[#71717A]">
-          Issue <code className="font-mono-spec text-[#18181B]">omod_...</code> API keys for the
-          Linux / Windows CLI uploader (
-          <code className="font-mono-spec text-[#18181B]">@omoide/cli</code>).
-        </p>
-      </header>
+  const accountAction = !loaded ? null : me?.actor.authMethod === "session" ? (
+    <Button onClick={() => void handleSignOut()}>Sign out</Button>
+  ) : (
+    <Button variant="primary" onClick={() => void handleGitHubSignIn()}>
+      Sign in with GitHub
+    </Button>
+  );
 
-      {/* Current User Card */}
-      <section className="rounded-xl border border-[#E4E4E7] bg-[#FAFAFA] p-5 space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="text-xs font-semibold uppercase tracking-wider text-[#71717A]">
-            Active Owner Session
+  return (
+    <main className="min-h-0 flex-1 overflow-y-auto bg-surface">
+      <div className="px-3">
+        <h1 className="py-6 text-lg font-semibold">Settings</h1>
+
+        <Section title="Account">
+          <div className="flex flex-col items-start gap-3 sm:flex-row sm:justify-between">
+            {me ? (
+              <dl className="min-w-0">
+                <AccountRow label="Name">{me.actor.name}</AccountRow>
+                <AccountRow label="Email">{me.actor.email}</AccountRow>
+                <AccountRow label="Auth method">
+                  {AUTH_METHOD_LABELS[me.actor.authMethod] ?? me.actor.authMethod}
+                </AccountRow>
+                <AccountRow label="User ID">
+                  <span className="font-mono text-xs">{me.actor.userId}</span>
+                </AccountRow>
+              </dl>
+            ) : (
+              <p className="text-ink-muted">{loaded ? "Not signed in." : "Loading..."}</p>
+            )}
+            {accountAction}
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => void handleGitHubSignIn()}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-[#18181B] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#3F3F46]"
-            >
-              Sign in with GitHub
-            </button>
-            {me?.actor.authMethod === "session" && (
-              <button
-                type="button"
-                onClick={() => void handleSignOut()}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-[#E4E4E7] bg-white px-3 py-1.5 text-xs font-medium text-[#3F3F46] hover:bg-[#FAFAFA]"
-              >
-                Sign out
-              </button>
+        </Section>
+
+        <Section title="API keys">
+          <p className="text-ink-muted">
+            The CLI uses these to upload photos. A key is shown only once, when you create it.
+          </p>
+
+          <form onSubmit={handleCreateKey} className="mt-4 flex flex-wrap items-center gap-2">
+            <label htmlFor="api-key-name" className="text-ink-muted">
+              Name
+            </label>
+            <TextInput
+              id="api-key-name"
+              value={keyName}
+              onChange={(e) => setKeyName(e.target.value)}
+              placeholder="windows-desktop"
+              maxLength={64}
+              disabled={!me}
+              className="w-56"
+            />
+            <Button type="submit" variant="primary" disabled={!me}>
+              Create key
+            </Button>
+          </form>
+
+          <div aria-live="polite">
+            {newlyCreatedKey && (
+              <div className="mt-4 rounded-md border border-accent/20 bg-accent/5 p-3">
+                <p className="font-medium">Copy this key now. It won't be shown again.</p>
+                <div className="mt-2 flex items-center gap-3">
+                  <code className="min-w-0 flex-1 font-mono text-xs break-all select-all">
+                    {newlyCreatedKey}
+                  </code>
+                  <Button size="sm" onClick={() => void copyKey()}>
+                    {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+                    {copied ? "Copied" : "Copy"}
+                  </Button>
+                </div>
+              </div>
             )}
           </div>
-        </div>
-        {me ? (
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 font-mono-spec text-xs">
-            <div className="rounded-md border border-[#E4E4E7] bg-white p-3">
-              <div className="text-[10px] text-[#71717A]">User ID</div>
-              <div className="mt-0.5 font-medium text-[#18181B]">{me.actor.userId}</div>
-            </div>
-            <div className="rounded-md border border-[#E4E4E7] bg-white p-3">
-              <div className="text-[10px] text-[#71717A]">Owner</div>
-              <div className="mt-0.5 font-medium text-[#18181B]">
-                {me.actor.name} ({me.actor.email})
-              </div>
-            </div>
-            <div className="rounded-md border border-[#E4E4E7] bg-white p-3">
-              <div className="text-[10px] text-[#71717A]">Auth Method</div>
-              <div className="mt-0.5 font-medium text-[#18181B]">{me.actor.authMethod}</div>
-            </div>
-          </div>
-        ) : (
-          <div className="rounded-md border border-[#E4E4E7] bg-white p-3 text-xs text-[#71717A]">
-            Not signed in yet. Click <strong>Sign in with GitHub</strong> to authenticate on this
-            origin (works on both production and preview URLs).
-          </div>
-        )}
-      </section>
 
-      {/* Create New CLI Key */}
-      <section className="rounded-xl border border-[#E4E4E7] bg-white p-5 space-y-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="font-display-mono text-sm font-semibold text-[#18181B]">
-              CLI API Keys (omod_...)
-            </h2>
-            <p className="text-xs text-[#71717A]">
-              Used by <code className="font-mono-spec">omoide auth</code> on Windows (`F:\DCIM`,
-              `G:\My Drive\Photography\picture`) or Linux.
-            </p>
-          </div>
-        </div>
-
-        <form onSubmit={handleCreateKey} className="flex flex-wrap gap-2">
-          <input
-            type="text"
-            value={keyName}
-            onChange={(e) => setKeyName(e.target.value)}
-            placeholder="Key label (e.g., windows-desktop)"
-            className="min-w-[240px] flex-1 rounded-lg border border-[#E4E4E7] bg-[#FAFAFA] px-3 py-2 font-mono-spec text-xs text-[#18181B]"
-          />
-          <button
-            type="submit"
-            className="inline-flex items-center gap-1.5 rounded-lg bg-[#18181B] px-4 py-2 text-xs font-medium text-white hover:bg-[#3F3F46]"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            Generate API Key
-          </button>
-        </form>
-
-        {newlyCreatedKey && (
-          <div className="rounded-lg border border-emerald-300 bg-emerald-50/70 p-4 space-y-2">
-            <div className="text-xs font-semibold text-emerald-900">
-              API Key Created — Copy now (shown only once):
+          {me && me.apiKeys.length > 0 && (
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full text-left">
+                <thead className="text-xs text-ink-muted">
+                  <tr className="border-b border-line">
+                    <th scope="col" className="py-1.5 pr-4 font-medium">
+                      Name
+                    </th>
+                    <th scope="col" className="py-1.5 pr-4 font-medium">
+                      Key
+                    </th>
+                    <th scope="col" className="py-1.5 pr-4 font-medium">
+                      Created
+                    </th>
+                    <th scope="col" className="py-1.5">
+                      <span className="sr-only">Actions</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {me.apiKeys.map((k) => (
+                    <tr key={k.id} className="border-b border-line last:border-b-0">
+                      <td className="py-1.5 pr-4 break-words">{k.name}</td>
+                      <td className="py-1.5 pr-4 font-mono text-xs whitespace-nowrap text-ink-muted">
+                        {k.start}...
+                      </td>
+                      <CreatedCell createdAt={k.createdAt} />
+                      <td className="py-1.5 text-right">
+                        <Button
+                          variant="danger-ghost"
+                          size="sm"
+                          aria-label={`Revoke ${k.name}`}
+                          onClick={() => void handleRevokeKey(k.id)}
+                        >
+                          Revoke
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-            <div className="flex items-center gap-2">
-              <code className="flex-1 overflow-x-auto rounded border border-emerald-200 bg-white px-3 py-2 font-mono-spec text-xs text-[#18181B]">
-                {newlyCreatedKey}
-              </code>
-              <button
-                type="button"
-                onClick={() => void copyKey()}
-                className="inline-flex items-center gap-1 rounded-md border border-emerald-300 bg-white px-3 py-2 text-xs font-medium text-emerald-900 hover:bg-emerald-100"
-              >
-                {copied ? (
-                  <>
-                    <Check className="h-3.5 w-3.5" /> Copied
-                  </>
-                ) : (
-                  <>
-                    <Copy className="h-3.5 w-3.5" /> Copy
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        )}
-
-        <div className="space-y-2 pt-2">
-          {me?.apiKeys.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-[#E4E4E7] p-4 text-center text-xs text-[#71717A]">
-              No API keys created yet.
-            </div>
-          ) : (
-            me?.apiKeys.map((k) => (
-              <div
-                key={k.id}
-                className="flex items-center justify-between rounded-lg border border-[#E4E4E7] bg-[#FAFAFA] px-4 py-2.5 text-xs"
-              >
-                <div className="space-y-0.5">
-                  <div className="font-medium text-[#18181B]">{k.name}</div>
-                  <div className="font-mono-spec text-[11px] text-[#71717A]">
-                    {k.start}... · Created {new Date(k.createdAt).toLocaleString("ja-JP")}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => void handleRevokeKey(k.id)}
-                  className="inline-flex items-center gap-1 rounded border border-[#E4E4E7] bg-white px-2.5 py-1 text-[#71717A] hover:border-red-300 hover:text-red-600"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  Revoke
-                </button>
-              </div>
-            ))
           )}
-        </div>
-      </section>
+          {me?.apiKeys.length === 0 && <p className="mt-4 text-ink-muted">No API keys yet.</p>}
+          {loaded && !me && <p className="mt-4 text-ink-muted">Sign in to manage API keys.</p>}
+        </Section>
 
-      {/* CLI Usage Quick Reference */}
-      <section className="rounded-xl border border-[#E4E4E7] bg-[#FAFAFA] p-5 space-y-3">
-        <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-[#71717A]">
-          <Terminal className="h-3.5 w-3.5" />
-          <span>Windows &amp; Linux CLI Commands</span>
-        </div>
-        <pre className="overflow-x-auto rounded-lg border border-[#E4E4E7] bg-white p-4 font-mono-spec text-xs leading-relaxed text-[#18181B]">
-          {[
-            "# 1. Configure server URL and API key",
-            "pnpm --filter @omoide/cli dev auth --url http://localhost:3000 --api-key omod_...",
-            "",
-            "# 2. Sync base JPEGs from Windows default drives (F:\\DCIM and G:\\My Drive\\Photography\\picture)",
-            "pnpm --filter @omoide/cli dev sync",
-            "",
-            "# 3. Sync a developed session folder (pairs .ARW + output/webp/* + output/png/*)",
-            'pnpm --filter @omoide/cli dev sync-developed "D:\\Pictures\\photos\\2026-06-16_higashiyama"',
-            "",
-            "# 4. Upload .ARW RAW files for photos favorited in the Web UI",
-            "pnpm --filter @omoide/cli dev sync-favorites",
-          ].join("\n")}
-        </pre>
-      </section>
+        <Section title="CLI">
+          <pre className="overflow-x-auto rounded-md bg-subtle p-3 font-mono text-xs leading-relaxed">
+            {CLI_COMMANDS}
+          </pre>
+        </Section>
+      </div>
     </main>
   );
 }
