@@ -11,31 +11,31 @@
 
 :root {
   --background: #ffffff;
-  --foreground: #18181b;
+  --foreground: #161615;
   --card: #ffffff;
-  --card-foreground: #18181b;
+  --card-foreground: #161615;
   --popover: #ffffff;
-  --popover-foreground: #18181b;
-  --primary: #2f5bd0;
+  --popover-foreground: #161615;
+  --primary: #2452c2;
   --primary-foreground: #ffffff;
-  --secondary: #f4f4f5;
-  --secondary-foreground: #18181b;
-  --muted: #f4f4f5;
-  --muted-foreground: #71717a;
+  --secondary: #f3f2ee;
+  --secondary-foreground: #161615;
+  --muted: #f3f2ee;
+  --muted-foreground: #6e6b64;
   --accent-foreground: #ffffff;
   --destructive: #b42318;
   --destructive-foreground: #ffffff;
-  --border: #e4e4e7;
-  --input: #e4e4e7;
-  --ring: #2f5bd0;
-  --sidebar: #f8f8fa;
-  --sidebar-foreground: #18181b;
-  --sidebar-primary: #2f5bd0;
+  --border: #e5e3dc;
+  --input: #e5e3dc;
+  --ring: #2452c2;
+  --sidebar: #f5f4f0;
+  --sidebar-foreground: #161615;
+  --sidebar-primary: #2452c2;
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #ededf0;
-  --sidebar-accent-foreground: #18181b;
-  --sidebar-border: #e4e4e7;
-  --sidebar-ring: #2f5bd0;
+  --sidebar-accent: #eae8e1;
+  --sidebar-accent-foreground: #161615;
+  --sidebar-border: #e5e3dc;
+  --sidebar-ring: #2452c2;
   --radius: 0.375rem;
 }
 
@@ -44,22 +44,22 @@
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 
   /* Surfaces */
-  --color-canvas: #fafafa;
+  --color-canvas: #faf9f6;
   --color-surface: #ffffff;
-  --color-subtle: #f4f4f5;
+  --color-subtle: #f3f2ee;
 
   /* Hairlines */
-  --color-line: #e4e4e7;
-  --color-line-strong: #d4d4d8;
+  --color-line: #e5e3dc;
+  --color-line-strong: #cfcbc2;
 
   /* Text */
-  --color-ink: #18181b;
-  --color-ink-muted: #52525b;
-  --color-ink-faint: #71717a;
+  --color-ink: #161615;
+  --color-ink-muted: #52504a;
+  --color-ink-faint: #7c7970;
 
   /* Single accent, plus the semantic colours that are not accents */
-  --color-accent: #2f5bd0;
-  --color-accent-hover: #264bb0;
+  --color-accent: #2452c2;
+  --color-accent-hover: #1d44a3;
   --color-star: #d97706;
   --color-danger: #b42318;
 

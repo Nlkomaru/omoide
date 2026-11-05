@@ -23,7 +23,6 @@ import {
   SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
-  SidebarMenuAction,
   SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -170,24 +169,27 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
 
   return (
     <Sidebar {...props}>
-      <SidebarHeader className="border-b border-sidebar-border px-3 py-2.5">
+      <SidebarHeader className="h-12 shrink-0 flex-row items-center justify-between border-b border-sidebar-border px-3 py-0">
         <Link
           to="/"
-          className="flex items-center gap-2.5 rounded-md px-1 py-0.5 text-ink transition-colors hover:text-accent"
+          className="flex min-w-0 items-center gap-2 rounded-md py-1 text-ink transition-colors hover:text-accent"
         >
-          <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-ink text-white">
+          <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-ink text-white shadow-2xs">
             <Aperture className="size-3.5" aria-hidden="true" />
           </span>
-          <span className="flex min-w-0 flex-col leading-none">
-            <span className="truncate text-sm font-semibold tracking-tight">Omoide</span>
-            <span className="truncate font-mono text-[10px] text-ink-faint">RAW & Developed</span>
-          </span>
+          <span className="truncate text-sm font-semibold tracking-tight">Omoide</span>
         </Link>
+        <span
+          title="Sony α7C (ILCE-7C)"
+          className="shrink-0 rounded-sm border border-line bg-surface px-1.5 py-0.5 font-mono text-[10px] font-medium text-ink-muted"
+        >
+          ILCE-7C
+        </span>
       </SidebarHeader>
 
-      <SidebarContent>
+      <SidebarContent className="py-1">
         <SidebarGroup>
-          <SidebarGroupLabel>Workspace</SidebarGroupLabel>
+          <SidebarGroupLabel>Navigation</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu aria-label="Main">
               <SidebarMenuItem>
@@ -260,33 +262,35 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
                     }
                     render={<SidebarMenuItem />}
                   >
-                    <SidebarMenuButton
-                      type="button"
-                      isActive={isMonthActive}
-                      onClick={() => handleSelectMonth(item.month)}
-                      className={hasActiveChild ? "font-medium text-ink" : ""}
-                    >
-                      <span className="font-mono text-xs">{item.month}</span>
-                      <SidebarMenuBadge>{formatCount(item.count)}</SidebarMenuBadge>
-                    </SidebarMenuButton>
-
-                    <CollapsibleTrigger
-                      render={
-                        <SidebarMenuAction
-                          type="button"
-                          aria-label={`Toggle dates for ${item.month}`}
-                          className="[&[aria-expanded=true]>svg]:rotate-90"
+                    <div className="relative flex items-center">
+                      <CollapsibleTrigger
+                        render={
+                          <button
+                            type="button"
+                            aria-label={`Toggle dates for ${item.month}`}
+                            className="absolute left-1.5 z-10 flex size-5 items-center justify-center rounded-sm text-ink-faint transition-colors hover:bg-sidebar-accent hover:text-ink [&[aria-expanded=true]>svg]:rotate-90"
+                          />
+                        }
+                      >
+                        <ChevronRight
+                          className="size-3.5 transition-transform duration-150"
+                          aria-hidden="true"
                         />
-                      }
-                    >
-                      <ChevronRight
-                        className="transition-transform duration-150"
-                        aria-hidden="true"
-                      />
-                    </CollapsibleTrigger>
+                      </CollapsibleTrigger>
+
+                      <SidebarMenuButton
+                        type="button"
+                        isActive={isMonthActive}
+                        onClick={() => handleSelectMonth(item.month)}
+                        className={`pl-7 ${hasActiveChild ? "font-medium text-ink" : ""}`}
+                      >
+                        <span className="font-mono text-xs tabular-nums">{item.month}</span>
+                        <SidebarMenuBadge>{formatCount(item.count)}</SidebarMenuBadge>
+                      </SidebarMenuButton>
+                    </div>
 
                     <CollapsibleContent>
-                      <SidebarMenuSub>
+                      <SidebarMenuSub className="ml-3.5 pr-0 pl-3">
                         {item.dates.map((d) => {
                           const shortDate = d.date.slice(5);
                           const isDateActive = selectedDate === d.date;
@@ -296,10 +300,11 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
                                 isActive={isDateActive}
                                 aria-label={`Filter by ${d.date}`}
                                 onClick={() => handleSelectDate(d.date)}
+                                className="pr-3.5"
                               >
-                                <span className="font-mono text-xs">{shortDate}</span>
+                                <span className="font-mono text-xs tabular-nums">{shortDate}</span>
                                 <span
-                                  className={`text-[11px] tabular-nums ${
+                                  className={`font-mono text-[11px] tabular-nums ${
                                     isDateActive ? "text-accent" : "text-ink-faint"
                                   }`}
                                 >

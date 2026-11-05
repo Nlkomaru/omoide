@@ -374,7 +374,7 @@ function SidebarGroupLabel({
     props: mergeProps<"div">(
       {
         className: cn(
-          "flex h-7 shrink-0 items-center justify-between rounded-md px-2 text-[11px] font-semibold tracking-wider uppercase text-ink-faint outline-hidden transition-[margin,opacity] duration-200 ease-linear group-data-[collapsible=icon]:-mt-8 group-data-[collapsible=icon]:opacity-0 [&>svg]:size-3.5 [&>svg]:shrink-0",
+          "flex h-6 shrink-0 items-center justify-between rounded-md px-2 text-xs font-medium text-ink-faint outline-hidden transition-[margin,opacity] duration-200 ease-linear group-data-[collapsible=icon]:-mt-8 group-data-[collapsible=icon]:opacity-0 [&>svg]:size-3.5 [&>svg]:shrink-0",
           className,
         ),
       },
@@ -446,7 +446,7 @@ function SidebarMenuItem({ className, ...props }: React.ComponentProps<"li">) {
 }
 
 const sidebarMenuButtonVariants = cva(
-  "peer/menu-button group/menu-button flex w-full items-center gap-2 overflow-hidden rounded-md px-2 text-left text-sm text-ink-muted outline-hidden transition-colors group-has-data-[sidebar=menu-action]/menu-item:pr-7 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! hover:bg-sidebar-accent hover:text-ink disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-active:bg-accent/10 data-active:font-medium data-active:text-accent [&_svg]:size-3.5 [&_svg]:shrink-0 [&>span:last-child]:truncate",
+  "peer/menu-button group/menu-button relative flex w-full items-center gap-2 overflow-hidden rounded-md px-2.5 text-left text-sm text-ink-muted outline-hidden transition-colors group-has-data-[sidebar=menu-action]/menu-item:pr-7 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! hover:bg-sidebar-accent hover:text-ink disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-active:bg-surface data-active:font-medium data-active:text-ink data-active:shadow-[0_1px_2px_rgba(0,0,0,0.04)] data-active:ring-1 data-active:ring-line data-active:before:absolute data-active:before:inset-y-1.5 data-active:before:left-0 data-active:before:w-[2.5px] data-active:before:rounded-full data-active:before:bg-accent [&_svg]:size-3.5 [&_svg]:shrink-0 [&>span:last-child]:truncate",
   {
     variants: {
       variant: {
@@ -633,7 +633,7 @@ function SidebarMenuSubButton({
       {
         type: "button",
         className: cn(
-          "flex h-6 w-full min-w-0 -translate-x-px items-center justify-between gap-2 overflow-hidden rounded-md px-2 text-left text-ink-muted outline-hidden transition-colors group-data-[collapsible=icon]:hidden hover:bg-sidebar-accent hover:text-ink disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[size=md]:text-xs data-[size=sm]:text-xs data-active:bg-accent/10 data-active:font-medium data-active:text-accent [&>span:first-child]:truncate [&>svg]:size-3.5 [&>svg]:shrink-0",
+          "relative flex h-6 w-full min-w-0 -translate-x-px items-center justify-between gap-2 overflow-hidden rounded-md px-2 text-left text-ink-muted outline-hidden transition-colors group-data-[collapsible=icon]:hidden hover:bg-sidebar-accent hover:text-ink disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[size=md]:text-xs data-[size=sm]:text-xs data-active:bg-surface data-active:font-medium data-active:text-ink data-active:shadow-[0_1px_2px_rgba(0,0,0,0.04)] data-active:ring-1 data-active:ring-line data-active:before:absolute data-active:before:inset-y-1 data-active:before:left-0 data-active:before:w-[2px] data-active:before:rounded-full data-active:before:bg-accent [&>span:first-child]:truncate [&>svg]:size-3.5 [&>svg]:shrink-0",
           className,
         ),
       },
