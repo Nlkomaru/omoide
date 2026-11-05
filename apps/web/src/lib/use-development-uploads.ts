@@ -1,6 +1,6 @@
 import type { PhotoDevelopmentItem } from "@omoide/core";
 import { useEffect, useSyncExternalStore } from "react";
-import { createUploadQueue, type UploadItem } from "~/lib/developmentUpload";
+import { createUploadQueue, type UploadItem } from "~/lib/development-upload";
 
 type UploadedHandler = (photoId: string, development: PhotoDevelopmentItem) => Promise<void>;
 

@@ -49,7 +49,12 @@ export function withDevelopment(
     ...detail.developments.filter((d) => d.id !== development.id),
     development,
   ].sort((a, b) => b.developedAt - a.developedAt);
-  return { ...detail, developments, developmentsCount: developments.length };
+  return {
+    ...detail,
+    developments,
+    developmentsCount: developments.length,
+    favoriteDevelopmentsCount: developments.filter((d) => d.isFavorite).length,
+  };
 }
 
 /** Removes a deleted version. Its posts stay, under the name the server kept for them. */
@@ -63,6 +68,7 @@ export function withoutDevelopment(
     ...detail,
     developments,
     developmentsCount: developments.length,
+    favoriteDevelopmentsCount: developments.filter((d) => d.isFavorite).length,
     posts: detail.posts.map((p) =>
       p.developmentId === developmentId ? { ...p, developmentId: null, deletedVersionLabel } : p,
     ),
@@ -74,11 +80,13 @@ export function withDevelopmentFavorite(
   developmentId: string,
   isFavorite: boolean,
 ): ApiPhotoDetail {
+  const developments = detail.developments.map((d) =>
+    d.id === developmentId ? { ...d, isFavorite } : d,
+  );
   return {
     ...detail,
-    developments: detail.developments.map((d) =>
-      d.id === developmentId ? { ...d, isFavorite } : d,
-    ),
+    developments,
+    favoriteDevelopmentsCount: developments.filter((d) => d.isFavorite).length,
   };
 }
 

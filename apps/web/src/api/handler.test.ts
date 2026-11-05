@@ -605,6 +605,40 @@ describe("Omoide REST API (@omoide/web)", () => {
         expect(malformed.photos).toHaveLength(7);
       }
     });
+
+    it("groups date counts under each month facet and filters by exact date", async () => {
+      const oct26 = Date.parse("2026-10-26T10:00:00+09:00");
+      const oct27 = Date.parse("2026-10-27T14:00:00+09:00");
+      await uploadPhoto(1, oct26, "lens-a");
+      await uploadPhoto(2, oct27, "lens-a");
+      await uploadPhoto(3, oct27 + 1000, "lens-b");
+
+      const res = await app.request("/api/v1/photos?date=2026-10-27", {}, env);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        photos: Array<{ id: string }>;
+        matchedCount: number;
+        facets: {
+          months: Array<{
+            month: string;
+            count: number;
+            dates: Array<{ date: string; count: number }>;
+          }>;
+        };
+      };
+      expect(body.photos).toHaveLength(2);
+      expect(body.matchedCount).toBe(2);
+      expect(body.facets.months).toEqual([
+        {
+          month: "2026-10",
+          count: 3,
+          dates: [
+            { date: "2026-10-26", count: 1 },
+            { date: "2026-10-27", count: 2 },
+          ],
+        },
+      ]);
+    });
   });
 
   describe("photo developments", () => {
@@ -799,7 +833,7 @@ describe("Omoide REST API (@omoide/web)", () => {
       expect(new Uint8Array(await asset.arrayBuffer())).toEqual(FILE);
     });
 
-    it("sets and clears a version's favorite, without touching the photo's or the facets", async () => {
+    it("sets and clears a version's favorite, updating favoriteDevelopmentsCount and favoriteDevelopedCount without touching the photo's favorite", async () => {
       const photoId = await createPhoto(1);
       const favorited = await uploadDevelopment(photoId, FILE);
       const other = await uploadDevelopment(photoId, webpBytes("another-file"));
@@ -817,15 +851,44 @@ describe("Omoide REST API (@omoide/web)", () => {
       const listRes = await app.request("/api/v1/photos?favorite=true", {}, env);
       const list = (await listRes.json()) as {
         photos: unknown[];
-        facets: { favoriteCount: number };
+        facets: { favoriteCount: number; favoriteDevelopedCount: number };
       };
       expect(list.photos).toHaveLength(0);
       expect(list.facets.favoriteCount).toBe(0);
+      expect(list.facets.favoriteDevelopedCount).toBe(1);
+
+      const favDevListRes = await app.request(
+        "/api/v1/photos?hasFavoriteDevelopment=true",
+        {},
+        env,
+      );
+      const favDevList = (await favDevListRes.json()) as {
+        photos: Array<{ id: string; favoriteDevelopmentsCount: number }>;
+        facets: { favoriteDevelopedCount: number };
+      };
+      expect(favDevList.photos).toHaveLength(1);
+      expect(favDevList.photos[0]).toMatchObject({
+        id: photoId,
+        favoriteDevelopmentsCount: 1,
+      });
+      expect(favDevList.facets.favoriteDevelopedCount).toBe(1);
 
       const cleared = await patchDevelopment(photoId, favorited.id, { isFavorite: false });
       expect(cleared.status).toBe(200);
       const afterClear = await getDetail(photoId);
       expect(afterClear.developments.find((d) => d.id === favorited.id)?.isFavorite).toBe(false);
+
+      const afterClearListRes = await app.request(
+        "/api/v1/photos?hasFavoriteDevelopment=true",
+        {},
+        env,
+      );
+      const afterClearList = (await afterClearListRes.json()) as {
+        photos: unknown[];
+        facets: { favoriteDevelopedCount: number };
+      };
+      expect(afterClearList.photos).toHaveLength(0);
+      expect(afterClearList.facets.favoriteDevelopedCount).toBe(0);
     });
 
     it("keeps version favorites when the photo's favorite changes", async () => {

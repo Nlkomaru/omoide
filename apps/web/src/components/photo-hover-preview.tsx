@@ -1,6 +1,6 @@
 import type { ApiPhotoSummary } from "@omoide/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BlurhashImage } from "~/components/BlurhashImage";
+import { BlurhashImage } from "~/components/blurhash-image";
 
 const SHOW_DELAY_MS = 120;
 /** Long enough to cross the gap between two thumbnails without the preview blinking. */

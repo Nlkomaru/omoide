@@ -9,9 +9,9 @@ import {
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Check, Star } from "lucide-react";
 import { memo, type ReactNode, type RefObject, useEffect, useRef } from "react";
-import { BlurhashImage } from "~/components/BlurhashImage";
-import type { PhotoPreviewControls } from "~/components/PhotoHoverPreview";
-import { Button, IconButton } from "~/components/ui";
+import { BlurhashImage } from "~/components/blurhash-image";
+import type { PhotoPreviewControls } from "~/components/photo-hover-preview";
+import { Button, IconButton } from "~/components/ui/button";
 import { formatBytes, formatCaptureTime, isRecorded } from "~/lib/format";
 
 const EM_DASH = "—";
@@ -115,9 +115,15 @@ const COLUMN = {
   },
   developed: {
     label: "Developed",
-    width: "w-20",
+    width: "w-24",
     className: `hidden xl:table-cell ${NUMERIC}`,
     bodyClassName: MUTED,
+    title: (photo) =>
+      photo.developmentsCount > 0
+        ? photo.favoriteDevelopmentsCount > 0
+          ? `${photo.developmentsCount} developed (${photo.favoriteDevelopmentsCount} favorite)`
+          : `${photo.developmentsCount} developed`
+        : undefined,
   },
   posted: {
     label: "Posted",
@@ -277,7 +283,23 @@ const PHOTO_COLUMNS = columnHelper.columns([
     ),
   ),
   photoColumn("developed", (photo) =>
-    photo.developmentsCount > 0 ? photo.developmentsCount : <Dash />,
+    photo.developmentsCount > 0 ? (
+      <span className="inline-flex items-center justify-end gap-1">
+        {photo.favoriteDevelopmentsCount > 0 && (
+          <>
+            <Star aria-hidden="true" className="size-3.5 fill-star text-star" />
+            <span className="sr-only">
+              {photo.favoriteDevelopmentsCount === 1
+                ? "1 favorite version, "
+                : `${photo.favoriteDevelopmentsCount} favorite versions, `}
+            </span>
+          </>
+        )}
+        <span>{photo.developmentsCount}</span>
+      </span>
+    ) : (
+      <Dash />
+    ),
   ),
   photoColumn("posted", (photo) => postedLabel(photo) || <Dash />),
 ]);

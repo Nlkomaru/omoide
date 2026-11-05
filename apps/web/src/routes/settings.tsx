@@ -1,7 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { Check, Copy } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
-import { Button, TextInput } from "~/components/ui";
+import { Button } from "~/components/ui/button";
+import { TextInput } from "~/components/ui/input";
+import { Separator } from "~/components/ui/separator";
+import { SidebarTrigger } from "~/components/ui/sidebar";
 import { formatLocalTime } from "~/lib/format";
 
 interface ApiKeyItem {
@@ -165,10 +168,13 @@ function SettingsPage() {
   );
 
   return (
-    <main className="min-h-0 flex-1 overflow-y-auto bg-surface">
-      <div className="px-3">
-        <h1 className="py-6 text-lg font-semibold">Settings</h1>
-
+    <main className="flex min-h-0 flex-1 flex-col bg-surface">
+      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-3">
+        <SidebarTrigger className="-ml-1" />
+        <Separator orientation="vertical" className="my-auto h-4" />
+        <h1 className="text-sm font-semibold">Settings</h1>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-3">
         <Section title="Account">
           <div className="flex flex-col items-start gap-3 sm:flex-row sm:justify-between">
             {me ? (

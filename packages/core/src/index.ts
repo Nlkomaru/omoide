@@ -1,5 +1,5 @@
 export * from "./blurhash";
 export * from "./exif";
 export * from "./ids";
-export * from "./imageFormat";
+export * from "./image-format";
 export * from "./schemas";

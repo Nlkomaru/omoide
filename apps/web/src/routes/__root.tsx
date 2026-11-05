@@ -1,7 +1,9 @@
 /// <reference types="vite/client" />
 import { createRootRoute, HeadContent, Outlet, Scripts } from "@tanstack/react-router";
 import type * as React from "react";
-import { Navbar } from "~/components/Navbar";
+import { AppSidebar, DateFilterProvider } from "~/components/app-sidebar";
+import { SidebarInset, SidebarProvider } from "~/components/ui/sidebar";
+import { TooltipProvider } from "~/components/ui/tooltip";
 import appCss from "~/styles.css?url";
 
 export const Route = createRootRoute({
@@ -20,12 +22,16 @@ export const Route = createRootRoute({
 function RootComponent() {
   return (
     <RootDocument>
-      <div className="flex h-dvh flex-col">
-        <Navbar />
-        <div className="flex min-h-0 flex-1 flex-col">
-          <Outlet />
-        </div>
-      </div>
+      <DateFilterProvider>
+        <TooltipProvider>
+          <SidebarProvider>
+            <AppSidebar />
+            <SidebarInset>
+              <Outlet />
+            </SidebarInset>
+          </SidebarProvider>
+        </TooltipProvider>
+      </DateFilterProvider>
     </RootDocument>
   );
 }

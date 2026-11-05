@@ -1,8 +1,8 @@
 import type { PhotoDevelopmentItem } from "@omoide/core";
 import { Star, Trash2, Upload, X } from "lucide-react";
 import { type DragEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Button, IconButton } from "~/components/ui";
-import { UPLOAD_ACCEPT, type UploadItem, type UploadStatus } from "~/lib/developmentUpload";
+import { Button, IconButton } from "~/components/ui/button";
+import { UPLOAD_ACCEPT, type UploadItem, type UploadStatus } from "~/lib/development-upload";
 import { formatBytes } from "~/lib/format";
 
 interface DevelopedVersionsProps {
