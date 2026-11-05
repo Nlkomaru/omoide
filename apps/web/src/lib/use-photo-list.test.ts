@@ -1,9 +1,15 @@
 import type { ApiPhotoSummary, ListPhotosResponse } from "@omoide/core";
 import { describe, expect, it } from "vitest";
-import { appendPage, mergeUpdatedPhoto } from "./usePhotoList";
+import { appendPage, mergeUpdatedPhoto } from "./use-photo-list";
 
-function photo(id: string, isFavorite = false): ApiPhotoSummary {
-  return { id, isFavorite, hasRaw: false, developmentsCount: 0 } as ApiPhotoSummary;
+function photo(id: string, isFavorite = false, favoriteDevelopmentsCount = 0): ApiPhotoSummary {
+  return {
+    id,
+    isFavorite,
+    hasRaw: false,
+    developmentsCount: favoriteDevelopmentsCount,
+    favoriteDevelopmentsCount,
+  } as ApiPhotoSummary;
 }
 
 function response(photos: ApiPhotoSummary[], favoriteCount: number): ListPhotosResponse {
@@ -17,6 +23,7 @@ function response(photos: ApiPhotoSummary[], favoriteCount: number): ListPhotosR
       totalCount: photos.length,
       favoriteCount,
       developedCount: 0,
+      favoriteDevelopedCount: 0,
       rawCount: 0,
     },
   };
@@ -61,9 +68,11 @@ describe("mergeUpdatedPhoto", () => {
   it("updates a row from any loaded page and ignores unknown photos", () => {
     const list = appendPage(response([photo("a")], 0), response([photo("b")], 0), NO_UPDATES);
 
-    const updated = mergeUpdatedPhoto(list, photo("b", true));
+    const updated = mergeUpdatedPhoto(list, photo("b", true, 2));
     expect(updated.photos[1]?.isFavorite).toBe(true);
+    expect(updated.photos[1]?.favoriteDevelopmentsCount).toBe(2);
     expect(updated.facets.favoriteCount).toBe(1);
+    expect(updated.facets.favoriteDevelopedCount).toBe(1);
 
     expect(mergeUpdatedPhoto(list, photo("z", true))).toBe(list);
   });

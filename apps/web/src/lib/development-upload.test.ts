@@ -13,7 +13,7 @@ import {
   type SendResult,
   sendUpload,
   type UploadItem,
-} from "./developmentUpload";
+} from "./development-upload";
 
 const WEBP_CONTENTS = "RIFF\0\0\0\0WEBPabc";
 const WEBP_SHA = createHash("sha256").update(WEBP_CONTENTS).digest("hex");

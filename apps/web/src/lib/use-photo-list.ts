@@ -24,6 +24,10 @@ export function mergeUpdatedPhoto(
         list.facets.developedCount +
         Number(updated.developmentsCount > 0) -
         Number(previous.developmentsCount > 0),
+      favoriteDevelopedCount:
+        list.facets.favoriteDevelopedCount +
+        Number(updated.favoriteDevelopmentsCount > 0) -
+        Number(previous.favoriteDevelopmentsCount > 0),
     },
   };
 }
@@ -46,6 +50,7 @@ function withLocalUpdates(
       favoriteCount: previous.facets.favoriteCount,
       rawCount: previous.facets.rawCount,
       developedCount: previous.facets.developedCount,
+      favoriteDevelopedCount: previous.facets.favoriteDevelopedCount,
     },
   };
 }

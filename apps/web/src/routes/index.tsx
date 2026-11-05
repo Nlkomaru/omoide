@@ -5,14 +5,19 @@ import type {
   SocialPlatform,
 } from "@omoide/core";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { RefreshCw, Search, Star, X } from "lucide-react";
+import { Calendar, RefreshCw, Search, Star, X } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { PhotoHoverPreview, usePhotoHoverPreview } from "~/components/PhotoHoverPreview";
-import { PhotoLightbox } from "~/components/PhotoLightbox";
-import { PhotoTable, PhotoTableSkeleton } from "~/components/PhotoTable";
-import { Button, buttonClassName, IconButton, Select, TextInput } from "~/components/ui";
-import { usePhotoList } from "~/lib/usePhotoList";
-import { usePhotoNavigation } from "~/lib/usePhotoNavigation";
+import { useDateFilter } from "~/components/app-sidebar";
+import { PhotoHoverPreview, usePhotoHoverPreview } from "~/components/photo-hover-preview";
+import { PhotoLightbox } from "~/components/photo-lightbox";
+import { PhotoTable, PhotoTableSkeleton } from "~/components/photo-table";
+import { Button, buttonClassName, IconButton } from "~/components/ui/button";
+import { TextInput } from "~/components/ui/input";
+import { Select } from "~/components/ui/select";
+import { Separator } from "~/components/ui/separator";
+import { SidebarTrigger } from "~/components/ui/sidebar";
+import { usePhotoList } from "~/lib/use-photo-list";
+import { usePhotoNavigation } from "~/lib/use-photo-navigation";
 
 const PAGE_LIMIT = 100;
 const NO_PHOTOS: ApiPhotoSummary[] = [];
@@ -41,13 +46,15 @@ function LibraryPage() {
   // Filter states
   const [search, setSearch] = useState("");
   const [lens, setLens] = useState("");
-  const [month, setMonth] = useState("");
   const [onlyFavorites, setOnlyFavorites] = useState(false);
+  const [onlyFavoriteDeveloped, setOnlyFavoriteDeveloped] = useState(false);
   const [onlyRaw, setOnlyRaw] = useState(false);
   const [onlyDeveloped, setOnlyDeveloped] = useState(false);
   const [platform, setPlatform] = useState<SocialPlatform | "">("");
   // Stays false through hydration, until the mount effect has read the filters from the URL.
   const [filtersReady, setFiltersReady] = useState(false);
+
+  const { month, date, setMonth, setDate, clearDateFilter, setTimelineFacets } = useDateFilter();
 
   const { target: previewTarget, controls: preview } = usePhotoHoverPreview(
     selectedPhotoId !== null,
@@ -60,11 +67,14 @@ function LibraryPage() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get("favorite") === "true") setOnlyFavorites(true);
+    if (params.get("hasFavoriteDevelopment") === "true") setOnlyFavoriteDeveloped(true);
     if (params.get("hasDeveloped") === "true") setOnlyDeveloped(true);
     if (params.get("hasRaw") === "true") setOnlyRaw(true);
     if (params.get("lens")) setLens(params.get("lens") ?? "");
+    if (params.get("month")) setMonth(params.get("month") ?? "");
+    if (params.get("date")) setDate(params.get("date") ?? "");
     setFiltersReady(true);
-  }, []);
+  }, [setMonth, setDate]);
 
   const query = useMemo(() => {
     if (!filtersReady) return null;
@@ -72,13 +82,26 @@ function LibraryPage() {
     if (search.trim()) params.set("search", search.trim());
     if (lens) params.set("lens", lens);
     if (month) params.set("month", month);
+    if (date) params.set("date", date);
     if (onlyFavorites) params.set("favorite", "true");
+    if (onlyFavoriteDeveloped) params.set("hasFavoriteDevelopment", "true");
     if (onlyRaw) params.set("hasRaw", "true");
     if (onlyDeveloped) params.set("hasDeveloped", "true");
     if (platform) params.set("platform", platform);
     params.set("limit", String(PAGE_LIMIT));
     return params.toString();
-  }, [filtersReady, search, lens, month, onlyFavorites, onlyRaw, onlyDeveloped, platform]);
+  }, [
+    filtersReady,
+    search,
+    lens,
+    month,
+    date,
+    onlyFavorites,
+    onlyFavoriteDeveloped,
+    onlyRaw,
+    onlyDeveloped,
+    platform,
+  ]);
 
   const handleListReset = useCallback(() => {
     scrollContainerRef.current?.scrollTo({ top: 0 });
@@ -97,6 +120,12 @@ function LibraryPage() {
     loadNextPage,
     updatePhoto,
   } = usePhotoList({ query, onReset: handleListReset });
+
+  useEffect(() => {
+    if (data?.facets) {
+      setTimelineFacets(data.facets.months, data.facets.totalCount);
+    }
+  }, [data?.facets, setTimelineFacets]);
 
   const handleToggleFavorite = useCallback(
     async (photo: ApiPhotoSummary) => {
@@ -141,8 +170,9 @@ function LibraryPage() {
   function resetFilters() {
     setSearch("");
     setLens("");
-    setMonth("");
+    clearDateFilter();
     setOnlyFavorites(false);
+    setOnlyFavoriteDeveloped(false);
     setOnlyRaw(false);
     setOnlyDeveloped(false);
     setPlatform("");
@@ -161,8 +191,17 @@ function LibraryPage() {
     loadMore: loadNextPage,
   });
   const hasFilters = Boolean(
-    search || lens || month || onlyFavorites || onlyRaw || onlyDeveloped || platform,
+    search ||
+      lens ||
+      month ||
+      date ||
+      onlyFavorites ||
+      onlyFavoriteDeveloped ||
+      onlyRaw ||
+      onlyDeveloped ||
+      platform,
   );
+  const activeTimelineLabel = date || month;
 
   function renderContent() {
     if (loadError === "unauthorized") {
@@ -222,20 +261,24 @@ function LibraryPage() {
 
   return (
     <main className="flex min-h-0 flex-1 flex-col bg-surface">
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-line px-3 py-2">
-        <div className="relative w-full sm:w-48 2xl:w-64">
+      <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-1.5 border-b border-line bg-surface px-3 py-1.5 lg:h-12 lg:flex-nowrap lg:py-0">
+        <SidebarTrigger className="-ml-1 shrink-0" />
+        <Separator orientation="vertical" className="my-auto h-4 shrink-0" />
+
+        <div className="relative min-w-36 flex-1 sm:w-44 sm:flex-none xl:w-56">
           <Search
             aria-hidden="true"
             className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-ink-faint"
           />
           <TextInput
             ref={searchInputRef}
+            size="sm"
             type="search"
             aria-label="Search photos"
             placeholder="Search photos"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full pr-8 pl-8 [&::-webkit-search-cancel-button]:appearance-none"
+            className="w-full pr-7 pl-7 [&::-webkit-search-cancel-button]:appearance-none"
           />
           {search && (
             <IconButton
@@ -245,7 +288,7 @@ function LibraryPage() {
                 setSearch("");
                 searchInputRef.current?.focus();
               }}
-              className="absolute top-1/2 right-0.5 -translate-y-1/2"
+              className="absolute top-1/2 right-0.5 size-6 -translate-y-1/2"
             >
               <X aria-hidden="true" />
             </IconButton>
@@ -253,10 +296,11 @@ function LibraryPage() {
         </div>
 
         <Select
+          size="sm"
           aria-label="Lens"
           value={lens}
           onChange={(e) => setLens(e.target.value)}
-          className="min-w-0 grow basis-[calc((100%-1rem)/3)] sm:grow-0 sm:basis-auto sm:w-40 2xl:w-52"
+          className="min-w-0 grow basis-[calc((100%-0.75rem)/2)] sm:w-36 sm:grow-0 sm:basis-auto xl:w-44"
         >
           <option value="">Lens</option>
           {facets?.lenses.map((l) => (
@@ -267,24 +311,11 @@ function LibraryPage() {
         </Select>
 
         <Select
-          aria-label="Month"
-          value={month}
-          onChange={(e) => setMonth(e.target.value)}
-          className="min-w-0 grow basis-[calc((100%-1rem)/3)] sm:grow-0 sm:basis-auto sm:w-32"
-        >
-          <option value="">Month</option>
-          {facets?.months.map((m) => (
-            <option key={m.month} value={m.month}>
-              {m.month} ({formatCount(m.count)})
-            </option>
-          ))}
-        </Select>
-
-        <Select
+          size="sm"
           aria-label="Platform"
           value={platform}
           onChange={(e) => setPlatform(e.target.value as SocialPlatform | "")}
-          className="min-w-0 grow basis-[calc((100%-1rem)/3)] sm:grow-0 sm:basis-auto sm:w-36"
+          className="min-w-0 grow basis-[calc((100%-0.75rem)/2)] sm:w-28 sm:grow-0 sm:basis-auto xl:w-32"
         >
           <option value="">Platform</option>
           <option value="instagram">Instagram</option>
@@ -293,43 +324,75 @@ function LibraryPage() {
           <option value="portfolio">Portfolio</option>
         </Select>
 
-        <FilterToggle
-          label="Favorites"
-          count={facets?.favoriteCount}
-          pressed={onlyFavorites}
-          onToggle={() => setOnlyFavorites((v) => !v)}
-          icon={<Star aria-hidden="true" className={onlyFavorites ? "fill-star text-star" : ""} />}
-        />
-        <FilterToggle
-          label="RAW"
-          count={facets?.rawCount}
-          pressed={onlyRaw}
-          onToggle={() => setOnlyRaw((v) => !v)}
-        />
-        <FilterToggle
-          label="Developed"
-          count={facets?.developedCount}
-          pressed={onlyDeveloped}
-          onToggle={() => setOnlyDeveloped((v) => !v)}
-        />
+        <Separator orientation="vertical" className="my-auto hidden h-4 shrink-0 sm:block" />
+
+        <div className="flex flex-wrap items-center gap-1 lg:flex-nowrap">
+          <FilterToggle
+            label="Favorites"
+            count={facets?.favoriteCount}
+            pressed={onlyFavorites}
+            onToggle={() => setOnlyFavorites((v) => !v)}
+            icon={
+              <Star aria-hidden="true" className={onlyFavorites ? "fill-star text-star" : ""} />
+            }
+          />
+          <FilterToggle
+            label="Dev Favorites"
+            count={facets?.favoriteDevelopedCount}
+            pressed={onlyFavoriteDeveloped}
+            onToggle={() => setOnlyFavoriteDeveloped((v) => !v)}
+            icon={
+              <Star
+                aria-hidden="true"
+                className={onlyFavoriteDeveloped ? "fill-star text-star" : ""}
+              />
+            }
+          />
+          <FilterToggle
+            label="RAW"
+            count={facets?.rawCount}
+            pressed={onlyRaw}
+            onToggle={() => setOnlyRaw((v) => !v)}
+          />
+          <FilterToggle
+            label="Developed"
+            count={facets?.developedCount}
+            pressed={onlyDeveloped}
+            onToggle={() => setOnlyDeveloped((v) => !v)}
+          />
+        </div>
+
+        {activeTimelineLabel && (
+          <Button
+            size="sm"
+            onClick={clearDateFilter}
+            aria-label={`Clear date filter ${activeTimelineLabel}`}
+            className="border-accent/40 bg-accent/10 font-mono text-xs text-accent hover:bg-accent/15"
+          >
+            <Calendar aria-hidden="true" className="size-3.5" />
+            {activeTimelineLabel}
+            <X aria-hidden="true" className="size-3.5" />
+          </Button>
+        )}
 
         {hasFilters && (
-          <Button variant="ghost" onClick={resetFilters}>
+          <Button size="sm" variant="ghost" onClick={resetFilters}>
             Clear
           </Button>
         )}
 
-        <div className="ml-auto flex items-center gap-2">
-          <IconButton aria-label="Refresh" title="Refresh" onClick={() => void refresh()}>
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          {data && !loadError && (
+            <p
+              aria-live="polite"
+              className="text-right font-mono text-xs whitespace-nowrap text-ink-faint tabular-nums"
+            >
+              {formatListCount(data)}
+            </p>
+          )}
+          <IconButton size="sm" aria-label="Refresh" title="Refresh" onClick={() => void refresh()}>
             <RefreshCw aria-hidden="true" className={loading ? "animate-spin" : ""} />
           </IconButton>
-          {/* Always rendered with a floor on its width, so the toolbar holds still as it counts. */}
-          <p
-            aria-live="polite"
-            className="min-w-36 text-right text-xs whitespace-nowrap text-ink-faint tabular-nums"
-          >
-            {data && !loadError && formatListCount(data)}
-          </p>
         </div>
       </div>
 
@@ -377,6 +440,7 @@ interface FilterToggleProps {
 function FilterToggle({ label, count, pressed, onToggle, icon }: FilterToggleProps) {
   return (
     <Button
+      size="sm"
       aria-pressed={pressed}
       onClick={onToggle}
       className="aria-pressed:border-accent/40 aria-pressed:bg-accent/10 aria-pressed:text-accent"
@@ -384,7 +448,7 @@ function FilterToggle({ label, count, pressed, onToggle, icon }: FilterTogglePro
       {icon}
       {label}
       {count !== undefined && (
-        <span className={`font-normal tabular-nums ${pressed ? "" : "text-ink-faint"}`}>
+        <span className={`font-mono font-normal tabular-nums ${pressed ? "" : "text-ink-faint"}`}>
           {formatCount(count)}
         </span>
       )}

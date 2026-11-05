@@ -21,7 +21,7 @@ import {
 import { and, desc, eq, inArray } from "drizzle-orm";
 import type { AppDatabase } from "~/db/client";
 import { photoDevelopments, photoPosts, photos } from "~/db/schema";
-import { versionLabel } from "~/lib/photoVersions";
+import { versionLabel } from "~/lib/photo-versions";
 
 function buildJpegAssetUrl(photoId: string): string {
   return `/api/v1/photos/${photoId}/asset/jpeg`;
@@ -627,6 +627,7 @@ export async function getPhotoDetailById(
     exifJson: row.exifJson ?? null,
     description: row.description,
     developmentsCount: developments.length,
+    favoriteDevelopmentsCount: developments.filter((d) => d.isFavorite).length,
     postsCount: posts.length,
     platforms,
     createdAt: row.createdAt,
@@ -684,7 +685,7 @@ export async function listPhotosForUser(
 
   // Filtering by owner keeps this at one query each, however large the library is.
   const devRows = await db
-    .select({ photoId: photoDevelopments.photoId })
+    .select({ photoId: photoDevelopments.photoId, isFavorite: photoDevelopments.isFavorite })
     .from(photoDevelopments)
     .where(eq(photoDevelopments.userId, userId));
 
@@ -694,8 +695,12 @@ export async function listPhotosForUser(
     .where(eq(photoPosts.userId, userId));
 
   const devCountByPhoto = new Map<string, number>();
+  const favDevCountByPhoto = new Map<string, number>();
   for (const dev of devRows) {
     devCountByPhoto.set(dev.photoId, (devCountByPhoto.get(dev.photoId) ?? 0) + 1);
+    if (dev.isFavorite) {
+      favDevCountByPhoto.set(dev.photoId, (favDevCountByPhoto.get(dev.photoId) ?? 0) + 1);
+    }
   }
 
   const platformsByPhoto = new Map<string, Set<SocialPlatform>>();
@@ -710,19 +715,30 @@ export async function listPhotosForUser(
   // Compute facets across all user photos
   const lensCounts = new Map<string, number>();
   const monthCounts = new Map<string, number>();
+  const dateCountsByMonth = new Map<string, Map<string, number>>();
   let favoriteCount = 0;
   let developedCount = 0;
+  let favoriteDevelopedCount = 0;
   let rawCount = 0;
 
   for (const p of allUserPhotos) {
     if (p.lensModel) {
       lensCounts.set(p.lensModel, (lensCounts.get(p.lensModel) ?? 0) + 1);
     }
-    const monthStr = formatYearMonth(p.takenAt, p.timezoneOffset);
+    const dateStr = formatCaptureDate(p.takenAt, p.timezoneOffset);
+    const monthStr = dateStr.slice(0, 7);
     monthCounts.set(monthStr, (monthCounts.get(monthStr) ?? 0) + 1);
+    let dateMap = dateCountsByMonth.get(monthStr);
+    if (!dateMap) {
+      dateMap = new Map<string, number>();
+      dateCountsByMonth.set(monthStr, dateMap);
+    }
+    dateMap.set(dateStr, (dateMap.get(dateStr) ?? 0) + 1);
+
     if (p.isFavorite) favoriteCount++;
     if (p.hasRaw) rawCount++;
     if ((devCountByPhoto.get(p.id) ?? 0) > 0) developedCount++;
+    if ((favDevCountByPhoto.get(p.id) ?? 0) > 0) favoriteDevelopedCount++;
   }
 
   // Apply query filters
@@ -749,14 +765,19 @@ export async function listPhotosForUser(
     if (query.hasDeveloped === "true" && devCount === 0) return false;
     if (query.hasDeveloped === "false" && devCount > 0) return false;
 
+    const favDevCount = favDevCountByPhoto.get(p.id) ?? 0;
+    if (query.hasFavoriteDevelopment === "true" && favDevCount === 0) return false;
+    if (query.hasFavoriteDevelopment === "false" && favDevCount > 0) return false;
+
     if (query.platform) {
       const platforms = platformsByPhoto.get(p.id);
       if (!platforms?.has(query.platform)) return false;
     }
 
-    if (query.month) {
-      const monthStr = formatYearMonth(p.takenAt, p.timezoneOffset);
-      if (monthStr !== query.month) return false;
+    if (query.month || query.date) {
+      const dateStr = formatCaptureDate(p.takenAt, p.timezoneOffset);
+      if (query.month && dateStr.slice(0, 7) !== query.month) return false;
+      if (query.date && dateStr !== query.date) return false;
     }
 
     if (query.search) {
@@ -807,6 +828,7 @@ export async function listPhotosForUser(
     exifJson: row.exifJson ?? null,
     description: row.description,
     developmentsCount: devCountByPhoto.get(row.id) ?? 0,
+    favoriteDevelopmentsCount: favDevCountByPhoto.get(row.id) ?? 0,
     postsCount: postCountByPhoto.get(row.id) ?? 0,
     platforms: Array.from(platformsByPhoto.get(row.id) ?? []),
     createdAt: row.createdAt,
@@ -822,17 +844,24 @@ export async function listPhotosForUser(
         .map(([lensModel, count]) => ({ lensModel, count }))
         .sort((a, b) => b.count - a.count),
       months: Array.from(monthCounts.entries())
-        .map(([month, count]) => ({ month, count }))
+        .map(([month, count]) => ({
+          month,
+          count,
+          dates: Array.from(dateCountsByMonth.get(month)?.entries() ?? [])
+            .map(([date, dateCount]) => ({ date, count: dateCount }))
+            .sort((a, b) => a.date.localeCompare(b.date)),
+        }))
         .sort((a, b) => b.month.localeCompare(a.month)),
       totalCount: allUserPhotos.length,
       favoriteCount,
       developedCount,
+      favoriteDevelopedCount,
       rawCount,
     },
   };
 }
 
-function formatYearMonth(takenAtMs: number, timezoneOffset: string): string {
+function formatCaptureDate(takenAtMs: number, timezoneOffset: string): string {
   const match = /^([+-])(\d{2}):(\d{2})$/.exec(timezoneOffset);
   let offsetMinutes = 9 * 60;
   if (match) {
@@ -842,5 +871,6 @@ function formatYearMonth(takenAtMs: number, timezoneOffset: string): string {
   const localDate = new Date(takenAtMs + offsetMinutes * 60_000);
   const year = localDate.getUTCFullYear();
   const month = String(localDate.getUTCMonth() + 1).padStart(2, "0");
-  return `${year}-${month}`;
+  const day = String(localDate.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }

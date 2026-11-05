@@ -24,8 +24,11 @@ import {
   useRef,
   useState,
 } from "react";
-import { DevelopedVersions } from "~/components/DevelopedVersions";
-import { Badge, Button, IconButton, Select, TextInput } from "~/components/ui";
+import { DevelopedVersions } from "~/components/developed-versions";
+import { Badge } from "~/components/ui/badge";
+import { Button, IconButton } from "~/components/ui/button";
+import { TextInput } from "~/components/ui/input";
+import { Select } from "~/components/ui/select";
 import { formatBytes, formatCaptureTime, isRecorded } from "~/lib/format";
 import {
   countPostsByDevelopment,
@@ -36,8 +39,8 @@ import {
   withDevelopmentFavorite,
   withoutDevelopment,
   withPosts,
-} from "~/lib/photoVersions";
-import { useDevelopmentUploads } from "~/lib/useDevelopmentUploads";
+} from "~/lib/photo-versions";
+import { useDevelopmentUploads } from "~/lib/use-development-uploads";
 
 interface PhotoLightboxProps {
   photoId: string | null;
@@ -311,11 +314,18 @@ export function PhotoLightbox({
     }
   }
 
-  /** Changes the star on screen only. A version's favorite moves nothing in the table. */
-  function showVersionFavorite(targetId: string, developmentId: string, isFavorite: boolean) {
+  /** Updates the version's star on screen and in the table's developed-favorite summary. */
+  function showVersionFavorite(
+    targetId: string,
+    developmentId: string,
+    isFavorite: boolean,
+    notifyTable = false,
+  ) {
     const current = detailRef.current;
     if (current?.id === targetId) {
-      showDetail(withDevelopmentFavorite(current, developmentId, isFavorite));
+      const next = withDevelopmentFavorite(current, developmentId, isFavorite);
+      showDetail(next);
+      if (notifyTable) onPhotoUpdated(next);
     }
   }
 
@@ -343,9 +353,17 @@ export function PhotoLightbox({
       favoritesInFlightRef.current.delete(id);
     }
 
-    showVersionFavorite(targetId, id, saved ?? previous);
-    if (saved === null && detailRef.current?.id === targetId) {
-      setFavoriteFailedId(id);
+    if (saved !== null) {
+      savedVersionChangesRef.current.push({
+        photoId: targetId,
+        apply: (current) => withDevelopmentFavorite(current, id, saved),
+      });
+      await applySavedChange(targetId, (current) => withDevelopmentFavorite(current, id, saved));
+    } else {
+      showVersionFavorite(targetId, id, previous);
+      if (detailRef.current?.id === targetId) {
+        setFavoriteFailedId(id);
+      }
     }
   }
 

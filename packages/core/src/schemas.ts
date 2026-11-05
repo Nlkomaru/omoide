@@ -98,6 +98,7 @@ export const ApiPhotoSummarySchema = z.object({
   exifJson: AuxiliaryExifSchema.nullable(),
   description: z.string().nullable(),
   developmentsCount: z.number().int(),
+  favoriteDevelopmentsCount: z.number().int(),
   postsCount: z.number().int(),
   platforms: z.array(SocialPlatformSchema),
   createdAt: z.number().int(),
@@ -190,16 +191,34 @@ export const ListPhotosQuerySchema = z.object({
   favorite: z.enum(["true", "false"]).optional(),
   hasRaw: z.enum(["true", "false"]).optional(),
   hasDeveloped: z.enum(["true", "false"]).optional(),
+  hasFavoriteDevelopment: z.enum(["true", "false"]).optional(),
   platform: SocialPlatformSchema.optional(),
   month: z
     .string()
     .regex(/^\d{4}-\d{2}$/)
+    .optional(),
+  date: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
     .optional(),
   search: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(200).optional().default(60),
   cursor: z.string().optional(),
 });
 export type ListPhotosQuery = z.infer<typeof ListPhotosQuerySchema>;
+
+export const MonthFacetDateSchema = z.object({
+  date: z.string(),
+  count: z.number().int(),
+});
+export type MonthFacetDate = z.infer<typeof MonthFacetDateSchema>;
+
+export const MonthFacetSchema = z.object({
+  month: z.string(),
+  count: z.number().int(),
+  dates: z.array(MonthFacetDateSchema),
+});
+export type MonthFacet = z.infer<typeof MonthFacetSchema>;
 
 export const ListPhotosResponseSchema = z.object({
   photos: z.array(ApiPhotoSummarySchema),
@@ -208,10 +227,11 @@ export const ListPhotosResponseSchema = z.object({
   matchedCount: z.number().int(),
   facets: z.object({
     lenses: z.array(z.object({ lensModel: z.string(), count: z.number().int() })),
-    months: z.array(z.object({ month: z.string(), count: z.number().int() })),
+    months: z.array(MonthFacetSchema),
     totalCount: z.number().int(),
     favoriteCount: z.number().int(),
     developedCount: z.number().int(),
+    favoriteDevelopedCount: z.number().int(),
     rawCount: z.number().int(),
   }),
 });

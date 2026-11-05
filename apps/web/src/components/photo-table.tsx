@@ -9,9 +9,9 @@ import {
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Check, Star } from "lucide-react";
 import { memo, type ReactNode, type RefObject, useEffect, useRef } from "react";
-import { BlurhashImage } from "~/components/BlurhashImage";
-import type { PhotoPreviewControls } from "~/components/PhotoHoverPreview";
-import { Button, IconButton } from "~/components/ui";
+import { BlurhashImage } from "~/components/blurhash-image";
+import type { PhotoPreviewControls } from "~/components/photo-hover-preview";
+import { Button, IconButton } from "~/components/ui/button";
 import { formatBytes, formatCaptureTime, isRecorded } from "~/lib/format";
 
 const EM_DASH = "—";
@@ -51,15 +51,15 @@ function postedLabel(photo: ApiPhotoSummary) {
 }
 
 const COLUMN = {
-  thumb: { label: "Preview", labelHidden: true, width: "w-[68px]", className: "pr-2 pl-3" },
+  thumb: { label: "Preview", labelHidden: true, width: "w-16", className: "pr-2 pl-3" },
   star: { label: "Favorite", labelHidden: true, width: "w-8", className: "px-0.5" },
   // No width below lg: the file column takes the slack until the lens column appears. From 2xl
   // it shares the slack with lens, which holds the shorter values.
-  file: { label: "File", width: "lg:w-64 2xl:w-[22%]", className: "px-2 text-left" },
+  file: { label: "File", width: "lg:w-76 2xl:w-[24%]", className: "px-2 text-left" },
   taken: {
     label: "Taken",
-    width: "w-36",
-    className: "pr-3 pl-2 text-left tabular-nums md:pr-2",
+    width: "w-34",
+    className: "pr-3 pl-2 text-left font-mono text-xs tabular-nums md:pr-2",
     bodyClassName: `whitespace-nowrap ${MUTED}`,
     title: (photo) => `${takenLabel(photo)} (${photo.timezoneOffset})`,
   },
@@ -73,25 +73,25 @@ const COLUMN = {
   },
   focal: {
     label: "Focal",
-    width: "w-18",
+    width: "w-16",
     className: `hidden md:table-cell ${NUMERIC}`,
     bodyClassName: MUTED,
   },
   aperture: {
     label: "Aperture",
-    width: "w-20",
+    width: "w-17",
     className: `hidden md:table-cell ${NUMERIC}`,
     bodyClassName: MUTED,
   },
   shutter: {
     label: "Shutter",
-    width: "w-20",
+    width: "w-18",
     className: `hidden md:table-cell ${NUMERIC}`,
     bodyClassName: MUTED,
   },
   iso: {
     label: "ISO",
-    width: "w-16",
+    width: "w-14",
     className: "hidden pr-3 pl-2 text-right tabular-nums whitespace-nowrap md:table-cell xl:pr-2",
     bodyClassName: MUTED,
   },
@@ -109,20 +109,26 @@ const COLUMN = {
   },
   raw: {
     label: "RAW",
-    width: "w-12",
+    width: "w-11",
     className: "hidden px-2 text-center xl:table-cell",
     bodyClassName: MUTED,
   },
   developed: {
     label: "Developed",
-    width: "w-20",
+    width: "w-22",
     className: `hidden xl:table-cell ${NUMERIC}`,
     bodyClassName: MUTED,
+    title: (photo) =>
+      photo.developmentsCount > 0
+        ? photo.favoriteDevelopmentsCount > 0
+          ? `${photo.developmentsCount} developed (${photo.favoriteDevelopmentsCount} favorite)`
+          : `${photo.developmentsCount} developed`
+        : undefined,
   },
   posted: {
     label: "Posted",
-    width: "w-40",
-    className: "hidden pr-3 pl-4 text-left xl:table-cell",
+    width: "w-24",
+    className: "hidden pr-3 pl-3 text-left xl:table-cell",
     bodyClassName: `truncate ${MUTED}`,
     title: (photo) => postedLabel(photo) || undefined,
   },
@@ -245,7 +251,7 @@ const PHOTO_COLUMNS = columnHelper.columns([
       title={photo.originalFilename}
       data-photo-open
       onClick={() => onOpen(photo.id)}
-      className="flex max-w-full cursor-pointer rounded-sm text-left font-medium text-ink"
+      className="flex max-w-full cursor-pointer rounded-sm text-left font-mono text-xs font-medium text-ink"
     >
       <Filename name={photo.originalFilename} />
     </button>
@@ -277,7 +283,26 @@ const PHOTO_COLUMNS = columnHelper.columns([
     ),
   ),
   photoColumn("developed", (photo) =>
-    photo.developmentsCount > 0 ? photo.developmentsCount : <Dash />,
+    photo.developmentsCount > 0 ? (
+      <span className="inline-flex items-center justify-end gap-1.5 font-mono text-xs tabular-nums">
+        {photo.favoriteDevelopmentsCount > 0 && (
+          <span className="inline-flex items-center gap-0.5 rounded-sm bg-star/12 px-1 py-0.5 text-[11px] font-medium text-star ring-1 ring-star/25">
+            <Star aria-hidden="true" className="size-3 fill-star text-star" />
+            <span>{photo.favoriteDevelopmentsCount}</span>
+            <span className="sr-only">
+              {photo.favoriteDevelopmentsCount === 1
+                ? " favorite version, "
+                : " favorite versions, "}
+            </span>
+          </span>
+        )}
+        <span className="rounded-sm bg-subtle px-1.5 py-0.5 text-ink ring-1 ring-line">
+          {photo.developmentsCount}
+        </span>
+      </span>
+    ) : (
+      <Dash />
+    ),
   ),
   photoColumn("posted", (photo) => postedLabel(photo) || <Dash />),
 ]);
@@ -317,7 +342,7 @@ function TableFrame({ busy, rowCount, head, children }: TableFrameProps) {
       aria-rowcount={rowCount}
       className="w-full table-fixed border-separate border-spacing-0"
     >
-      <thead className="sticky top-0 z-10 bg-surface">{head}</thead>
+      <thead className="sticky top-0 z-10 bg-subtle/80 backdrop-blur-xs">{head}</thead>
       <tbody>{children}</tbody>
     </table>
   );

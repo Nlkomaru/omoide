@@ -8,14 +8,18 @@ import {
   withDevelopmentFavorite,
   withoutDevelopment,
   withPosts,
-} from "./photoVersions";
+} from "./photo-versions";
 
 function dev(id: string, developedAt: number, isFavorite = false): PhotoDevelopmentItem {
   return { id, developedAt, isFavorite } as PhotoDevelopmentItem;
 }
 
 function detail(developments: PhotoDevelopmentItem[]): ApiPhotoDetail {
-  return { developments, developmentsCount: developments.length } as ApiPhotoDetail;
+  return {
+    developments,
+    developmentsCount: developments.length,
+    favoriteDevelopmentsCount: developments.filter((d) => d.isFavorite).length,
+  } as ApiPhotoDetail;
 }
 
 describe("versionLabels", () => {
@@ -72,10 +76,11 @@ describe("withDevelopment", () => {
 });
 
 describe("withDevelopmentFavorite", () => {
-  it("changes only that version", () => {
+  it("changes only that version and updates favoriteDevelopmentsCount", () => {
     const next = withDevelopmentFavorite(detail([dev("a", 2), dev("b", 1)]), "b", true);
 
     expect(next.developments.map((d) => d.isFavorite)).toEqual([false, true]);
+    expect(next.favoriteDevelopmentsCount).toBe(1);
   });
 });
 

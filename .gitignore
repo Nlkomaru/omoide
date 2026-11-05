@@ -9,6 +9,7 @@ dist
 .tanstack
 .wrangler
 .cloudflare
+.playwright-mcp
 styled-system
 
 # Environment & Secrets (NEVER commit secrets)
