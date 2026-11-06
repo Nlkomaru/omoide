@@ -382,9 +382,6 @@ async function runSyncDevelopedCommand(argv: string[]) {
         devBar.increment(1, `${entry.stem} (dry-run)`);
         return;
       }
-      // Ensure base photo exists & mark as favorite since it was selected for development
-
-      preparedBase.metadata.isFavorite = true;
       const { photoId } = await client.uploadBasePhoto(
         preparedBase.metadata,
         jpegPath,
