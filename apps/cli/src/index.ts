@@ -57,7 +57,7 @@ Omoide CLI — Sony α7C (ILCE-7C) Photo Archive & RAW/Developed Sync Tool
 Usage:
   omoide auth --url <server-url> --api-key <omod_...> [--dirs <dir1,dir2>] [--quality <80-100>] [--max-bytes <1048576>] [--concurrency <4>]
   omoide sync [paths...] [--with-raw] [--quality <1-100>] [--max-bytes <bytes>] [--concurrency <4>] [--dry-run]
-  omoide sync-developed <session-dir> [--photo-dirs <dir1,dir2>] [--quality <1-100>] [--max-bytes <bytes>] [--concurrency <4>] [--dry-run]
+  omoide sync-developed <session-dir> [--photo-dirs <dir1,dir2>] [--with-raw | --without-raw] [--quality <1-100>] [--max-bytes <bytes>] [--concurrency <4>] [--dry-run]
   omoide sync-favorites [paths...] [--concurrency <4>] [--dry-run]
   omoide rename [paths...] [--dest <dir>] [--copy] [--dry-run]
   omoide post add --photo <uuidv7> --platform <instagram|twitter|blog|portfolio> --url <post-url> [--caption <text>]
@@ -294,11 +294,10 @@ async function runSyncCommand(argv: string[]) {
 }
 
 /**
- * `omoide sync-developed <session-dir> [--photo-dirs <dir1,dir2>] [--dry-run]`
- * Scans a developed photo directory (e.g. `D:\Pictures\photos\2026-06-16_higashiyama`),
- * pairs `.ARW` files with `output/webp/*` and `output/png/*` exports, locates the 1:1 base `.JPG`
- * (in the session dir or in `--photo-dirs` / default drives), and uploads the base JPEG, 1:1 `.ARW` RAW,
- * and 1:N developed variants.
+ * `omoide sync-developed <session-dir> [--photo-dirs <dir1,dir2>] [--with-raw | --without-raw] [--dry-run]`
+ * Scans a developed photo directory, pairs `.ARW` files with developed exports, locates the 1:1 base `.JPG`,
+ * and uploads the base JPEG and developed variants. The paired `.ARW` is uploaded by default; `--without-raw`
+ * skips it and `--with-raw` explicitly enables it.
  */
 async function runSyncDevelopedCommand(argv: string[]) {
   const { values, positionals } = parseArgs({
@@ -307,6 +306,8 @@ async function runSyncDevelopedCommand(argv: string[]) {
     options: {
       "photo-dirs": { type: "string" },
       "dry-run": { type: "boolean", default: false },
+      "with-raw": { type: "boolean", default: false },
+      "without-raw": { type: "boolean", default: false },
       quality: { type: "string" },
       "max-bytes": { type: "string" },
       concurrency: { type: "string" },
@@ -345,6 +346,11 @@ async function runSyncDevelopedCommand(argv: string[]) {
   );
   if (entries.length === 0) return;
 
+  if (values["with-raw"] && values["without-raw"]) {
+    console.error("Error: Use only one of --with-raw or --without-raw.");
+    process.exit(1);
+  }
+  const includeRaw = !values["without-raw"];
   const { jpegByStem, rawByStem } = await buildStemFileIndex(archiveDirs);
   const client = new OmoideApiClient(config);
 
@@ -358,7 +364,7 @@ async function runSyncDevelopedCommand(argv: string[]) {
   await runWithConcurrency(entries, concurrency, async (entry) => {
     try {
       const jpegPath = entry.jpegPath ?? jpegByStem.get(entry.stem) ?? null;
-      const rawPath = entry.rawPath ?? rawByStem.get(entry.stem) ?? null;
+      const rawPath = includeRaw ? entry.rawPath ?? rawByStem.get(entry.stem) ?? null : null;
 
       if (!jpegPath) {
         devBar.logAbove(
@@ -376,8 +382,8 @@ async function runSyncDevelopedCommand(argv: string[]) {
         devBar.increment(1, `${entry.stem} (dry-run)`);
         return;
       }
-
       // Ensure base photo exists & mark as favorite since it was selected for development
+
       preparedBase.metadata.isFavorite = true;
       const { photoId } = await client.uploadBasePhoto(
         preparedBase.metadata,
