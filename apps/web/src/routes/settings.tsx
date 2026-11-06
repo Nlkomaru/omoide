@@ -40,7 +40,7 @@ const CLI_COMMANDS = [
   "# 2. Sync base JPEGs from Windows default drives (F:\\DCIM and G:\\My Drive\\Photography\\picture)",
   "pnpm --filter @omoide/cli dev sync",
   "",
-  "# 3. Sync a developed session folder (pairs output variants; ARW upload is optional)",
+  "# 3. Attach developed variants to originals already synced to Omoide (no JPEG upload; optional ARW)",
   'pnpm --filter @omoide/cli dev sync-developed "D:\\Pictures\\photos\\2026-06-16_higashiyama" --without-raw',
   "",
   "# 4. Upload .ARW RAW files for photos favorited in the Web UI",

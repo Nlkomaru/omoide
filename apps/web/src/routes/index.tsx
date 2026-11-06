@@ -424,6 +424,10 @@ function LibraryPage() {
         onNext={navigation.goNext}
         onClose={handleCloseDetail}
         onPhotoUpdated={updatePhoto}
+        onPhotoDeleted={() => {
+          setSelectedPhotoId(null);
+          void refresh();
+        }}
       />
     </main>
   );

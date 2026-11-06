@@ -448,6 +448,47 @@ export async function deleteDevelopmentRecord(
   return { deletedVersionLabel, updatedAt };
 }
 
+/**
+ * Deletes a photo and all of its stored assets. Files are removed before the cascading database
+ * delete so a storage failure leaves the photo record available for a safe retry.
+ */
+export async function deletePhotoRecord(
+  db: AppDatabase,
+  userId: string,
+  photoId: string,
+  removeFile: (r2Key: string) => Promise<void>,
+): Promise<boolean> {
+  const rows = await db
+    .select()
+    .from(photos)
+    .where(and(eq(photos.id, photoId), eq(photos.userId, userId)))
+    .limit(1);
+  const photo = rows[0];
+  if (!photo) return false;
+
+  const developments = await db
+    .select({ r2Key: photoDevelopments.r2Key })
+    .from(photoDevelopments)
+    .where(and(eq(photoDevelopments.photoId, photoId), eq(photoDevelopments.userId, userId)));
+
+  for (const key of [
+    photo.jpegKey,
+    photo.thumbKey,
+    photo.rawKey,
+    ...developments.map((d) => d.r2Key),
+  ]) {
+    if (key) await removeFile(key);
+  }
+  await db.batch([
+    db.delete(photoPosts).where(eq(photoPosts.photoId, photoId)),
+    db
+      .delete(photoDevelopments)
+      .where(and(eq(photoDevelopments.photoId, photoId), eq(photoDevelopments.userId, userId))),
+    db.delete(photos).where(and(eq(photos.id, photoId), eq(photos.userId, userId))),
+  ]);
+  return true;
+}
+
 export type AddPostResult =
   | { status: "created"; post: PhotoPostItem }
   | { status: "photo_not_found" }

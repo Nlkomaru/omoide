@@ -822,6 +822,32 @@ describe("Omoide REST API (@omoide/web)", () => {
 
     const FILE = webpBytes("developed-file-bytes");
 
+    it("deletes the original photo, all associated assets, developments, and linked posts", async () => {
+      const photoId = await createPhoto(1);
+      const development = await uploadDevelopment(photoId, FILE);
+      await postPost(photoId, development.id);
+      await db
+        .update(schema.photos)
+        .set({ jpegKey: "original.jpg", thumbKey: "thumb.avif", rawKey: "raw/DSC00001.ARW" })
+        .where(sql`id = ${photoId}`);
+      for (const key of ["original.jpg", "thumb.avif", "raw/DSC00001.ARW"]) {
+        mockR2.store.set(key, {
+          body: new ArrayBuffer(0),
+          contentType: "application/octet-stream",
+        });
+      }
+
+      const res = await app.request(`/api/v1/photos/${photoId}`, { method: "DELETE" }, env);
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true });
+      expect(mockR2.store.size).toBe(0);
+      expect(await db.select().from(schema.photos).all()).toHaveLength(0);
+      expect(await db.select().from(schema.photoDevelopments).all()).toHaveLength(0);
+      expect(await db.select().from(schema.photoPosts).all()).toHaveLength(0);
+      expect((await app.request(`/api/v1/photos/${photoId}`, {}, env)).status).toBe(404);
+    });
+
     it("stores an uploaded file and serves it back from the returned url", async () => {
       const photoId = await createPhoto(1);
       const development = await uploadDevelopment(photoId, FILE);
