@@ -96,6 +96,11 @@ export function withPosts(detail: ApiPhotoDetail, posts: PhotoPostItem[]): ApiPh
     posts,
     postsCount: posts.length,
     platforms: Array.from(new Set(posts.map((p) => p.platform))),
+    postLinks: posts.map((post) => ({
+      id: post.id,
+      platform: post.platform,
+      url: post.postUrl,
+    })),
   };
 }
 

@@ -20,6 +20,7 @@ import {
   checkExistingPhotos,
   deleteDevelopmentRecord,
   deletePhotoPostRecord,
+  deletePhotoRecord,
   getPhotoDetailById,
   listPhotosForUser,
   sha256Hex,
@@ -163,6 +164,31 @@ photosRouter.post(
   },
 );
 
+/**
+ * DELETE /api/v1/photos/:id
+ * Delete a photo, all associated developed variants, and their stored assets.
+ */
+photosRouter.delete(
+  "/:id",
+  describeRoute({
+    tags: ["Photos"],
+    summary: "Delete a photo and all associated assets",
+    responses: {
+      200: { description: "`{ ok: true }`" },
+      404: { description: "Photo not found" },
+    },
+  }),
+  async (c) => {
+    const deleted = await deletePhotoRecord(
+      c.get("db"),
+      c.get("actor").userId,
+      c.req.param("id"),
+      (r2Key) => deleteR2Object(c.env.PHOTOS_BUCKET, r2Key),
+    );
+    if (!deleted) return c.json({ error: "Photo not found" }, 404);
+    return c.json({ ok: true });
+  },
+);
 /**
  * GET /api/v1/photos/:id
  * Get full photo detail including 1:N developed variants and 1:N social posts.

@@ -57,6 +57,7 @@ interface PhotoLightboxProps {
   onNext: () => void;
   onClose: () => void;
   onPhotoUpdated: (updated: ApiPhotoDetail) => void;
+  onPhotoDeleted: () => void;
 }
 
 const EM_DASH = "—";
@@ -110,6 +111,7 @@ export function PhotoLightbox({
   onNext,
   onClose,
   onPhotoUpdated,
+  onPhotoDeleted,
 }: PhotoLightboxProps) {
   const [loadedDetail, setDetail] = useState<ApiPhotoDetail | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -364,6 +366,32 @@ export function PhotoLightbox({
       if (detailRef.current?.id === targetId) {
         setFavoriteFailedId(id);
       }
+    }
+  }
+
+  async function handleDeletePhoto() {
+    if (
+      !detail ||
+      !window.confirm(
+        `Delete ${detail.originalFilename}, all its RAW and developed files, and linked post records? This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+    setDeletingIds((ids) => new Set(ids).add(detail.id));
+    setDeleteFailedId(null);
+    try {
+      const res = await fetch(`/api/v1/photos/${detail.id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Photo deletion failed");
+      onPhotoDeleted();
+    } catch {
+      setDeleteFailedId(detail.id);
+    } finally {
+      setDeletingIds((ids) => {
+        const next = new Set(ids);
+        next.delete(detail.id);
+        return next;
+      });
     }
   }
 
@@ -632,7 +660,7 @@ export function PhotoLightbox({
                   {activeWidth} × {activeHeight} px · {formatBytes(activeByteSize)}
                 </span>
               </span>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <a
                   href={activeImageUrl}
                   download={downloadFilename(photo.originalFilename, activeDevelopment)}
@@ -652,7 +680,21 @@ export function PhotoLightbox({
                     )}
                   </a>
                 )}
+                <button
+                  type="button"
+                  className={`${STAGE_ACTION} text-red-200 hover:text-white`}
+                  disabled={!detail || deletingIds.has(photo.id)}
+                  onClick={() => void handleDeletePhoto()}
+                >
+                  <Trash2 aria-hidden="true" />
+                  Delete photo
+                </button>
               </div>
+              {deleteFailedId === photo.id && (
+                <p role="alert" className="w-full text-xs text-red-200">
+                  Photo could not be deleted. Retry after checking the connection.
+                </p>
+              )}
             </div>
           )}
         </div>

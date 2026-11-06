@@ -101,6 +101,13 @@ export const ApiPhotoSummarySchema = z.object({
   favoriteDevelopmentsCount: z.number().int(),
   postsCount: z.number().int(),
   platforms: z.array(SocialPlatformSchema),
+  postLinks: z.array(
+    z.object({
+      id: z.string(),
+      platform: SocialPlatformSchema,
+      url: z.string().url(),
+    }),
+  ),
   createdAt: z.number().int(),
   updatedAt: z.number().int(),
 });

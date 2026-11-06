@@ -464,6 +464,7 @@ describe("Omoide REST API (@omoide/web)", () => {
         developmentsCount: number;
         postsCount: number;
         platforms: string[];
+        postLinks: Array<{ platform: string; url: string }>;
       }>;
       facets: {
         totalCount: number;
@@ -477,6 +478,18 @@ describe("Omoide REST API (@omoide/web)", () => {
     expect(listBody.photos[0]?.developmentsCount).toBe(2);
     expect(listBody.photos[0]?.postsCount).toBe(2);
     expect(listBody.photos[0]?.platforms).toEqual(expect.arrayContaining(["instagram", "twitter"]));
+    expect(listBody.photos[0]?.postLinks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          platform: "instagram",
+          url: "https://www.instagram.com/p/DSC03367/",
+        }),
+        expect.objectContaining({
+          platform: "twitter",
+          url: "https://x.com/nikomaru/status/1234567890",
+        }),
+      ]),
+    );
     expect(listBody.facets.totalCount).toBe(1);
     expect(listBody.facets.favoriteCount).toBe(1);
     expect(listBody.facets.rawCount).toBe(1);
@@ -821,6 +834,32 @@ describe("Omoide REST API (@omoide/web)", () => {
     }
 
     const FILE = webpBytes("developed-file-bytes");
+
+    it("deletes the original photo, all associated assets, developments, and linked posts", async () => {
+      const photoId = await createPhoto(1);
+      const development = await uploadDevelopment(photoId, FILE);
+      await postPost(photoId, development.id);
+      await db
+        .update(schema.photos)
+        .set({ jpegKey: "original.jpg", thumbKey: "thumb.avif", rawKey: "raw/DSC00001.ARW" })
+        .where(sql`id = ${photoId}`);
+      for (const key of ["original.jpg", "thumb.avif", "raw/DSC00001.ARW"]) {
+        mockR2.store.set(key, {
+          body: new ArrayBuffer(0),
+          contentType: "application/octet-stream",
+        });
+      }
+
+      const res = await app.request(`/api/v1/photos/${photoId}`, { method: "DELETE" }, env);
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true });
+      expect(mockR2.store.size).toBe(0);
+      expect(await db.select().from(schema.photos).all()).toHaveLength(0);
+      expect(await db.select().from(schema.photoDevelopments).all()).toHaveLength(0);
+      expect(await db.select().from(schema.photoPosts).all()).toHaveLength(0);
+      expect((await app.request(`/api/v1/photos/${photoId}`, {}, env)).status).toBe(404);
+    });
 
     it("stores an uploaded file and serves it back from the returned url", async () => {
       const photoId = await createPhoto(1);

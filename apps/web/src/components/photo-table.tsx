@@ -7,7 +7,16 @@ import {
   useTable,
 } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Check, Star } from "lucide-react";
+import {
+  BriefcaseBusiness,
+  Check,
+  Instagram,
+  Link as LinkIcon,
+  type LucideIcon,
+  Newspaper,
+  Star,
+  Twitter,
+} from "lucide-react";
 import { memo, type ReactNode, type RefObject, useEffect, useRef } from "react";
 import { BlurhashImage } from "~/components/blurhash-image";
 import type { PhotoPreviewControls } from "~/components/photo-hover-preview";
@@ -47,7 +56,7 @@ function takenLabel(photo: ApiPhotoSummary) {
 }
 
 function postedLabel(photo: ApiPhotoSummary) {
-  return photo.platforms.map((platform) => PLATFORM_LABELS[platform]).join(", ");
+  return photo.postLinks.map((post) => `${PLATFORM_LABELS[post.platform]}: ${post.url}`).join(", ");
 }
 
 const COLUMN = {
@@ -143,11 +152,19 @@ function columnLayout(columnId: string): ColumnLayout {
 }
 
 const PLATFORM_LABELS: Record<SocialPlatform, string> = {
-  instagram: "IG",
-  twitter: "X",
+  instagram: "Instagram",
+  twitter: "Twitter / X",
   blog: "Blog",
   portfolio: "Portfolio",
   other: "Other",
+};
+
+const PLATFORM_ICONS: Record<SocialPlatform, LucideIcon> = {
+  instagram: Instagram,
+  twitter: Twitter,
+  blog: Newspaper,
+  portfolio: BriefcaseBusiness,
+  other: LinkIcon,
 };
 
 const ROW_CELLS = "[&>td]:h-10 [&>td]:border-b [&>td]:border-line";
@@ -304,7 +321,31 @@ const PHOTO_COLUMNS = columnHelper.columns([
       <Dash />
     ),
   ),
-  photoColumn("posted", (photo) => postedLabel(photo) || <Dash />),
+  photoColumn("posted", (photo) =>
+    photo.postLinks.length > 0 ? (
+      <div className="inline-flex max-w-full items-center gap-0.5 overflow-x-auto">
+        {photo.postLinks.map((post, index) => {
+          const PlatformIcon = PLATFORM_ICONS[post.platform];
+          const label = PLATFORM_LABELS[post.platform];
+          return (
+            <a
+              key={post.id}
+              href={post.url}
+              target="_blank"
+              rel="noreferrer"
+              aria-label={`Open ${label} post ${index + 1}`}
+              title={`${label}: ${post.url}`}
+              className="inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-ink-muted hover:bg-subtle hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
+            >
+              <PlatformIcon aria-hidden="true" className="size-4" />
+            </a>
+          );
+        })}
+      </div>
+    ) : (
+      <Dash />
+    ),
+  ),
 ]);
 
 function getPhotoRowId(photo: ApiPhotoSummary) {

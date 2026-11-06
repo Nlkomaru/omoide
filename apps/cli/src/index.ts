@@ -57,7 +57,7 @@ Omoide CLI — Sony α7C (ILCE-7C) Photo Archive & RAW/Developed Sync Tool
 Usage:
   omoide auth --url <server-url> --api-key <omod_...> [--dirs <dir1,dir2>] [--quality <80-100>] [--max-bytes <1048576>] [--concurrency <4>]
   omoide sync [paths...] [--with-raw] [--quality <1-100>] [--max-bytes <bytes>] [--concurrency <4>] [--dry-run]
-  omoide sync-developed <session-dir> [--photo-dirs <dir1,dir2>] [--with-raw | --without-raw] [--quality <1-100>] [--max-bytes <bytes>] [--concurrency <4>] [--dry-run]
+  omoide sync-developed <session-dir> [--photo-dirs <dir1,dir2>] [--with-raw | --without-raw] [--concurrency <4>] [--dry-run] (attach variants to an already-synced photo; no JPEG upload)
   omoide sync-favorites [paths...] [--concurrency <4>] [--dry-run]
   omoide rename [paths...] [--dest <dir>] [--copy] [--dry-run]
   omoide post add --photo <uuidv7> --platform <instagram|twitter|blog|portfolio> --url <post-url> [--caption <text>]
@@ -294,10 +294,8 @@ async function runSyncCommand(argv: string[]) {
 }
 
 /**
- * `omoide sync-developed <session-dir> [--photo-dirs <dir1,dir2>] [--with-raw | --without-raw] [--dry-run]`
- * Scans a developed photo directory, pairs `.ARW` files with developed exports, locates the 1:1 base `.JPG`,
- * and uploads the base JPEG and developed variants. The paired `.ARW` is uploaded by default; `--without-raw`
- * skips it and `--with-raw` explicitly enables it.
+ * Finds the already-uploaded base photo by the original JPEG's SHA-256 and attaches developed variants
+ * to it without uploading the JPEG. The paired `.ARW` is uploaded by default; `--without-raw` skips it.
  */
 async function runSyncDevelopedCommand(argv: string[]) {
   const { values, positionals } = parseArgs({
@@ -308,8 +306,6 @@ async function runSyncDevelopedCommand(argv: string[]) {
       "dry-run": { type: "boolean", default: false },
       "with-raw": { type: "boolean", default: false },
       "without-raw": { type: "boolean", default: false },
-      quality: { type: "string" },
-      "max-bytes": { type: "string" },
       concurrency: { type: "string" },
     },
   });
@@ -334,10 +330,6 @@ async function runSyncDevelopedCommand(argv: string[]) {
       `ℹ️ Capping concurrency to ${concurrency} (requested: ${rawConcurrency}) to prevent socket exhaustion and timeouts.\n`,
     );
   }
-  const quality = values.quality ? Number.parseInt(values.quality, 10) : config.jpegQuality;
-  const maxBytes = values["max-bytes"]
-    ? Number.parseInt(values["max-bytes"], 10)
-    : (config.maxBytes ?? 1024 * 1024);
 
   console.log(`Scanning developed session directory: ${sessionDir}`);
   const entries = await scanDevelopedSessionDirectory(sessionDir);
@@ -364,7 +356,7 @@ async function runSyncDevelopedCommand(argv: string[]) {
   await runWithConcurrency(entries, concurrency, async (entry) => {
     try {
       const jpegPath = entry.jpegPath ?? jpegByStem.get(entry.stem) ?? null;
-      const rawPath = includeRaw ? entry.rawPath ?? rawByStem.get(entry.stem) ?? null : null;
+      const rawPath = includeRaw ? (entry.rawPath ?? rawByStem.get(entry.stem) ?? null) : null;
 
       if (!jpegPath) {
         devBar.logAbove(
@@ -374,21 +366,25 @@ async function runSyncDevelopedCommand(argv: string[]) {
         return;
       }
 
-      const preparedBase = await prepareBasePhotoUpload(jpegPath, undefined, quality, maxBytes);
+      const jpegSha256 = await computeFileSha256(jpegPath);
+      const [existingPhoto] = await client.checkHashes([jpegSha256]);
+      if (!existingPhoto) {
+        devBar.logAbove(
+          `Warning: Original photo for ${entry.stem} is not uploaded yet. Sync it first; skipping developed variants.`,
+        );
+        devBar.increment(1, `${entry.stem} (original missing)`);
+        return;
+      }
+      const { photoId } = existingPhoto;
       if (values["dry-run"]) {
         devBar.logAbove(
-          `[DRY-RUN] ${entry.stem} -> UUIDv7 ${preparedBase.photoId} | RAW: ${rawPath ? "yes" : "no"} | Developments: ${entry.developments.map((d) => `${d.format}:${d.label}`).join(", ")}`,
+          `[DRY-RUN] ${entry.stem} -> existing photo ${photoId} | RAW: ${rawPath ? "yes" : "no"} | Developments: ${entry.developments.map((d) => `${d.format}:${d.label}`).join(", ")}`,
         );
         devBar.increment(1, `${entry.stem} (dry-run)`);
         return;
       }
-      const { photoId } = await client.uploadBasePhoto(
-        preparedBase.metadata,
-        jpegPath,
-        preparedBase.thumbAvifBuffer,
-        preparedBase.compressedJpegBuffer,
-      );
-      devBar.logAbove(`Synced base photo ${entry.stem} (${photoId})`);
+
+      devBar.logAbove(`Found original photo ${entry.stem} (${photoId})`);
 
       if (rawPath) {
         devBar.logAbove(`  + Uploading 1:1 RAW ${path.basename(rawPath)}...`);
