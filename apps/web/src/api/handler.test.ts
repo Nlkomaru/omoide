@@ -464,6 +464,7 @@ describe("Omoide REST API (@omoide/web)", () => {
         developmentsCount: number;
         postsCount: number;
         platforms: string[];
+        postLinks: Array<{ platform: string; url: string }>;
       }>;
       facets: {
         totalCount: number;
@@ -477,6 +478,18 @@ describe("Omoide REST API (@omoide/web)", () => {
     expect(listBody.photos[0]?.developmentsCount).toBe(2);
     expect(listBody.photos[0]?.postsCount).toBe(2);
     expect(listBody.photos[0]?.platforms).toEqual(expect.arrayContaining(["instagram", "twitter"]));
+    expect(listBody.photos[0]?.postLinks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          platform: "instagram",
+          url: "https://www.instagram.com/p/DSC03367/",
+        }),
+        expect.objectContaining({
+          platform: "twitter",
+          url: "https://x.com/nikomaru/status/1234567890",
+        }),
+      ]),
+    );
     expect(listBody.facets.totalCount).toBe(1);
     expect(listBody.facets.favoriteCount).toBe(1);
     expect(listBody.facets.rawCount).toBe(1);

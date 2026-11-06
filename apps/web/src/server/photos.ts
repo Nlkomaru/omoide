@@ -671,6 +671,11 @@ export async function getPhotoDetailById(
     favoriteDevelopmentsCount: developments.filter((d) => d.isFavorite).length,
     postsCount: posts.length,
     platforms,
+    postLinks: posts.map((post) => ({
+      id: post.id,
+      platform: post.platform,
+      url: post.postUrl,
+    })),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     developments: developments.map(toDevelopmentItem),
@@ -731,7 +736,12 @@ export async function listPhotosForUser(
     .where(eq(photoDevelopments.userId, userId));
 
   const postRows = await db
-    .select({ photoId: photoPosts.photoId, platform: photoPosts.platform })
+    .select({
+      id: photoPosts.id,
+      photoId: photoPosts.photoId,
+      platform: photoPosts.platform,
+      url: photoPosts.postUrl,
+    })
     .from(photoPosts)
     .where(eq(photoPosts.userId, userId));
 
@@ -745,12 +755,19 @@ export async function listPhotosForUser(
   }
 
   const platformsByPhoto = new Map<string, Set<SocialPlatform>>();
+  const postLinksByPhoto = new Map<
+    string,
+    Array<{ id: string; platform: SocialPlatform; url: string }>
+  >();
   const postCountByPhoto = new Map<string, number>();
   for (const post of postRows) {
     postCountByPhoto.set(post.photoId, (postCountByPhoto.get(post.photoId) ?? 0) + 1);
     const set = platformsByPhoto.get(post.photoId) ?? new Set<SocialPlatform>();
     set.add(post.platform);
     platformsByPhoto.set(post.photoId, set);
+    const links = postLinksByPhoto.get(post.photoId) ?? [];
+    links.push({ id: post.id, platform: post.platform, url: post.url });
+    postLinksByPhoto.set(post.photoId, links);
   }
 
   // Compute facets across all user photos
@@ -872,6 +889,7 @@ export async function listPhotosForUser(
     favoriteDevelopmentsCount: favDevCountByPhoto.get(row.id) ?? 0,
     postsCount: postCountByPhoto.get(row.id) ?? 0,
     platforms: Array.from(platformsByPhoto.get(row.id) ?? []),
+    postLinks: postLinksByPhoto.get(row.id) ?? [],
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   }));
