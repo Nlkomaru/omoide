@@ -15,7 +15,6 @@
     "check:ci": "biome ci .",
     "db:generate": "pnpm --filter @omoide/web db:generate",
     "db:migrate": "pnpm --filter @omoide/web db:migrate",
-    "secrets:push": "gh secret set -f .env",
     "env:sync": "node scripts/sync-dev-vars.mjs"
   },
   "devDependencies": {

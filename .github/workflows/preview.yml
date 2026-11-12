@@ -1,0 +1,120 @@
+name: Deploy Preview
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-preview-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+jobs:
+  preview:
+    if: >-
+      (github.event_name == 'pull_request'
+        && github.event.pull_request.head.repo.full_name == github.repository
+        && github.actor != 'dependabot[bot]')
+      || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    env:
+      CF_SEND_TELEMETRY: "false"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check & Typecheck
+        run: |
+          pnpm run check:ci
+          pnpm run typecheck
+
+      - name: Run tests
+        run: pnpm run test
+
+      - name: Build Web with cf
+        run: pnpm --filter @omoide/web exec cf build
+
+      - name: Load Preview Secrets
+        uses: nlkomaru/secret-manager@main
+        with:
+          project: "omoide"
+          env: "preview"
+
+      - id: upload
+        name: Upload preview version (branch + commit URLs)
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          BRANCH_NAME: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
+        run: |
+          set -euo pipefail
+          short_sha="${HEAD_SHA::8}"
+          sanitized_branch="$(printf '%s' "$BRANCH_NAME" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9-]+/-/g; s/^-+//; s/-+$//')"
+          if [[ ! "$sanitized_branch" =~ ^[a-z] ]]; then
+            sanitized_branch="b-${sanitized_branch}"
+          fi
+          branch_alias="${sanitized_branch::40}"
+
+          upload_version() {
+            local alias="$1" label="$2"
+            local out="$RUNNER_TEMP/cf-output-${label}.ndjson"
+            CI=true WRANGLER_OUTPUT_FILE_PATH="$out" pnpm --filter @omoide/web exec cf workers versions create \
+              --prebuilt --mode production \
+              --preview-alias "$alias" --tag "$alias" --message "${BRANCH_NAME} (${short_sha})"
+            local result
+            result="$(jq -c 'select(.type == "version-upload")' "$out" | tail -n 1)"
+            printf '%s\n' "$result"
+            echo "${label}_alias_url=$(jq -r '.preview_alias_url // empty' <<<"$result")" >> "$GITHUB_OUTPUT"
+            echo "${label}_version_url=$(jq -r '.version_url // .preview_url // empty' <<<"$result")" >> "$GITHUB_OUTPUT"
+            echo "${label}_version_id=$(jq -r '.version_id // empty' <<<"$result")" >> "$GITHUB_OUTPUT"
+          }
+
+          upload_version "$branch_alias" "branch"
+          if [ "$EVENT_NAME" = "pull_request" ] && [ -n "$PR_NUMBER" ]; then
+            upload_version "pr-${PR_NUMBER}" "pr"
+          fi
+          echo "short_sha=${short_sha}" >> "$GITHUB_OUTPUT"
+          echo "branch_alias=${branch_alias}" >> "$GITHUB_OUTPUT"
+
+      - if: github.event_name == 'pull_request' && steps.upload.outcome == 'success'
+        name: Comment preview URLs on PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO_NAME: ${{ github.event.repository.name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BRANCH_NAME: ${{ github.head_ref }}
+          SHORT_SHA: ${{ steps.upload.outputs.short_sha }}
+          VERSION_ID: ${{ steps.upload.outputs.branch_version_id }}
+          PR_URL: ${{ steps.upload.outputs.pr_alias_url }}
+          BRANCH_URL: ${{ steps.upload.outputs.branch_alias_url }}
+          COMMIT_URL: ${{ steps.upload.outputs.branch_version_url }}
+        run: |
+          {
+            echo "## 🚀 Preview of ${REPO_NAME}"
+            echo
+            echo "| Resource | Link |"
+            echo "|----------|------|"
+            [ -n "$PR_URL" ] && echo "| 🌐 PR #${PR_NUMBER} (latest) | ${PR_URL} |"
+            [ -n "$BRANCH_URL" ] && echo "| 🌿 Branch \`${BRANCH_NAME}\` (latest) | ${BRANCH_URL} |"
+            [ -n "$COMMIT_URL" ] && echo "| 📌 Commit \`${SHORT_SHA}\` | ${COMMIT_URL} |"
+            echo
+            echo "Worker Version: \`${VERSION_ID:-unknown}\`"
+          } > comment.md
+          gh pr comment "$PR_NUMBER" --body-file comment.md --edit-last --create-if-none
