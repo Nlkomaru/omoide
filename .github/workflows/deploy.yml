@@ -55,10 +55,20 @@ jobs:
           project: "omoide"
           env: "production"
           export-json: ${{ runner.temp }}/worker-secrets.json
+          export-json-keys: |
+            BETTER_AUTH_SECRET
+            BETTER_AUTH_URL
+            GH_CLIENT_ID
+            GH_CLIENT_SECRET
+            ALLOWED_USERS
+            R2_ACCESS_KEY_ID
+            R2_SECRET_ACCESS_KEY
+            R2_BUCKET_NAME
+            R2_S3_ENDPOINT
 
       - name: Apply D1 Migrations & Deploy Production
         run: |
           set -euo pipefail
+          trap 'rm -f "$RUNNER_TEMP/worker-secrets.json"' EXIT
           CI=true pnpm --filter @omoide/web exec cf d1 migrations apply "$CLOUDFLARE_DATABASE_ID" --dir migrations
-          CI=true pnpm --filter @omoide/web exec cf deploy --prebuilt --mode production --secrets-file "${{ runner.temp }}/worker-secrets.json"
-          rm -f "${{ runner.temp }}/worker-secrets.json"
+          CI=true pnpm --filter @omoide/web exec cf deploy --prebuilt --mode production --secrets-file "$RUNNER_TEMP/worker-secrets.json"
