@@ -13,7 +13,7 @@ SD カード（`F:\DCIM`）からアーカイブ先（`G:\My Drive\Photography\p
 $d = Get-Date; $q = "$($d.Year)-q$([math]::Ceiling($d.Month / 3))"
 
 # 1. SD カードの写真を日付 + UUIDv7 形式でアーカイブ先へ整理・移動（--dry-run で事前確認可）
-omoide rename "F:\DCIM" --dest "G:\My Drive\Photography\picture\$q"
+omoide rename "F:\DCIM" --dest "G:\My Drive\photography\picture\$q"
 
 # 2. 整理したフォルダの JPEG をサーバーへアップロード
 omoide sync "G:\My Drive\Photography\picture\$q"
