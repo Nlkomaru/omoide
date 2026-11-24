@@ -21,8 +21,8 @@
     "@biomejs/biome": "^2.6.8",
     "@types/node": "^22.13.14",
     "typescript": "^5.8.2",
-    "vite-plus": "^1.7.0",
-    "vitest": "^3.2.0"
+    "vite-plus": "1.8.0",
+    "vitest": "5.1.1"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

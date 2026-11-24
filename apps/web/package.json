@@ -4,12 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite dev --port 3000 --host",
-    "build": "cf build",
-    "preview": "vite preview",
+    "dev": "vp dev --port 3000 --host",
+    "build": "vp build",
+    "preview": "vp preview",
     "deploy": "cf build && cf deploy --prebuilt --mode production",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --root ../.. --config vitest.config.ts apps/web/src",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "cf d1 migrations apply \"$CLOUDFLARE_DATABASE_ID\" --dir migrations"
   },
@@ -24,11 +24,11 @@
     "@opentelemetry/api": "^1.9.1",
     "@scalar/hono-api-reference": "^0.11.0",
     "@tailwindcss/vite": "^4.3.5",
-    "@tanstack/react-router": "1.170.42",
-    "@tanstack/react-start": "1.168.61",
+    "@tanstack/react-router": "1.170.46",
+    "@tanstack/react-start": "1.169.7",
     "@tanstack/react-table": "^9.3.1",
     "@tanstack/react-virtual": "^3.14.28",
-    "@tanstack/router-plugin": "1.168.43",
+    "@tanstack/router-plugin": "1.169.0",
     "@unpic/placeholder": "^0.1.2",
     "aws4fetch": "^1.0.20",
     "better-auth": "^1.7.27",
@@ -55,8 +55,9 @@
     "cf": "1.0.0-beta.20",
     "drizzle-kit": "^0.31.0",
     "typescript": "^5.8.2",
-    "vite": "^7.3.8",
-    "vitest": "^3.2.0",
+    "vite": "npm:@voidzero-dev/vite-plus-core@8.3.8001",
+    "vite-plus": "1.8.0",
+    "vitest": "5.1.1",
     "wrangler": "^4.166.0"
   }
 }
