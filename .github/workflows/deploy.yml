@@ -43,8 +43,8 @@ jobs:
       - name: Run tests
         run: pnpm run test
 
-      - name: Build Web with cf
-        run: pnpm --filter @omoide/web exec cf build
+      - name: Build Web with Vite+
+        run: pnpm --filter @omoide/web build
 
       - name: Dry-run deploy
         run: pnpm --filter @omoide/web exec cf deploy --prebuilt --mode production --dry-run
